@@ -139,6 +139,18 @@ public class AdminSystemPanel extends JPanel {
     private boolean useDbFunctionRevenue = false;
     private JButton btnToggleRevenueFunction;
 
+    /*
+     * Dùng để khóa snapshot doanh thu sau khi load lần đầu.
+     *
+     * Function OFF:
+     * - Load lần đầu vẫn lấy dữ liệu hiện tại để màn hình có số liệu.
+     * - Sau đó nếu có realtime hoặc reload nội bộ thì KHÔNG query lại doanh thu.
+     *
+     * Function ON:
+     * - Cho phép reload doanh thu, gọi Oracle Function.
+     */
+    private boolean initialLoadDone = false;
+
     public AdminSystemPanel() {
         setLayout(new BorderLayout());
         setBackground(bg);
@@ -148,7 +160,13 @@ public class AdminSystemPanel extends JPanel {
 
         initUI();
         initRealtime();
-        reloadAll();
+
+        /*
+         * Load lần đầu để có dữ liệu ban đầu.
+         * Sau lần này, nếu Function OFF thì các reload tự động sẽ bị khóa snapshot doanh thu.
+         */
+        reloadAll(true);
+        initialLoadDone = true;
     }
 
     private void initRealtime() {
@@ -212,7 +230,7 @@ public class AdminSystemPanel extends JPanel {
 
         SwingUtilities.invokeLater(() -> {
             try {
-                reloadAll();
+                reloadAll(false);
             } catch (Exception ex) {
                 ex.printStackTrace();
             } finally {
@@ -275,7 +293,7 @@ public class AdminSystemPanel extends JPanel {
          * Bật Function:
          * Reload ngay để lấy dữ liệu mới nhất từ Oracle Function.
                  */
-                reloadAll();
+                reloadAll(true);
             } else {
                 /*
          * Tắt Function:
@@ -286,7 +304,7 @@ public class AdminSystemPanel extends JPanel {
             }
         });
         JButton btnReload = createPrimaryButton("Làm mới", blue);
-        btnReload.addActionListener(e -> reloadAll());
+        btnReload.addActionListener(e -> reloadAll(true));
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         actions.setOpaque(false);
@@ -514,7 +532,7 @@ public class AdminSystemPanel extends JPanel {
             resetFilterToCurrentMonth();
             syncSpinnerWithCurrentFilter();
             updateFilterInfoLabel();
-            reloadAll();
+            reloadAll(true);
         });
 
         left.add(lblFrom);
@@ -590,7 +608,7 @@ public class AdminSystemPanel extends JPanel {
                 + fmt.format(Date.from(filterTo.atZone(ZoneId.systemDefault()).toInstant()));
 
         updateFilterInfoLabel();
-        reloadAll();
+        reloadAll(true);
     }
 
     private void updateFilterInfoLabel() {
@@ -836,12 +854,48 @@ public class AdminSystemPanel extends JPanel {
     }
 
     private void reloadAll() {
-        reloadCards();
+        reloadAll(false);
+    }
 
-        reloadImportSalesEfficiencyCards();
-        reloadImportSalesEfficiencyByStore(tblOverviewRevenueByStore);
-        reloadImportSalesEfficiencyByStore(tblReportRevenueByStore);
+    private void reloadAll(boolean forceRevenueRefresh) {
+        /*
+         * ============================================================
+         * QUAN TRỌNG CHO DEMO FUNCTION
+         * ============================================================
+         *
+         * Function OFF:
+         * - Sau lần load đầu tiên, khóa snapshot doanh thu.
+         * - Khi thanh toán đơn hàng, realtime có gọi reloadAll(false)
+         *   thì doanh thu KHÔNG tự cộng.
+         *
+         * Function ON:
+         * - Cho phép reload doanh thu.
+         * - Lãi gộp/doanh thu cuối cùng sẽ lấy từ Oracle Function.
+         *
+         * forceRevenueRefresh = true:
+         * - Dùng cho load lần đầu.
+         * - Dùng khi bấm Làm mới.
+         * - Dùng khi đổi bộ lọc ngày.
+         * - Dùng khi bật Function ON.
+         */
+        boolean lockRevenueSnapshot = initialLoadDone
+                && !useDbFunctionRevenue
+                && !forceRevenueRefresh;
 
+        if (lockRevenueSnapshot) {
+            System.out.println("[AdminSystemPanel] Function OFF: khóa snapshot doanh thu, bỏ qua reload doanh thu.");
+        } else {
+            reloadCards();
+
+            reloadImportSalesEfficiencyCards();
+            reloadImportSalesEfficiencyByStore(tblOverviewRevenueByStore);
+            reloadImportSalesEfficiencyByStore(tblReportRevenueByStore);
+        }
+
+        /*
+         * Các bảng không phải doanh thu vẫn cập nhật được.
+         * Nếu muốn khóa toàn bộ màn hình khi Function OFF, đưa các dòng này vào block else bên trên.
+         */
         reloadInventoryByStore(tblOverviewInventoryByStore);
         reloadInventoryByStore(tblReportInventoryByStore);
         reloadTopEmployee();
