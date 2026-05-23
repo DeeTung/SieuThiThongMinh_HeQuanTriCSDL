@@ -135,6 +135,9 @@ public class AdminSystemPanel extends JPanel {
     private LocalDateTime filterTo;
     private String filterLabel = "Tháng hiện tại";
 
+    private boolean useDbFunctionRevenue = false;
+    private JButton btnToggleRevenueFunction;
+
     public AdminSystemPanel() {
         setLayout(new BorderLayout());
         setBackground(bg);
@@ -246,18 +249,48 @@ public class AdminSystemPanel extends JPanel {
         JButton btnExportReport = createPrimaryButton("Xuất report", primary);
         btnExportReport.addActionListener(e -> exportSystemReport());
 
+        btnToggleRevenueFunction = createPrimaryButton("Function: OFF", red);
+        btnToggleRevenueFunction.setPreferredSize(new Dimension(145, 42));
+        btnToggleRevenueFunction.addActionListener(e -> {
+            useDbFunctionRevenue = !useDbFunctionRevenue;
+            updateFunctionToggleButton();
+            reloadAll();
+        });
+
         JButton btnReload = createPrimaryButton("Làm mới", blue);
         btnReload.addActionListener(e -> reloadAll());
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         actions.setOpaque(false);
         actions.add(btnExportReport);
+        actions.add(btnToggleRevenueFunction);
         actions.add(btnReload);
-
         p.add(textPanel, BorderLayout.WEST);
         p.add(actions, BorderLayout.EAST);
 
         return p;
+    }
+
+    private void updateFunctionToggleButton() {
+        if (btnToggleRevenueFunction == null) {
+            return;
+        }
+
+        if (useDbFunctionRevenue) {
+            btnToggleRevenueFunction.setText("Function: ON");
+            btnToggleRevenueFunction.setBackground(green);
+            btnToggleRevenueFunction.setToolTipText(
+                    "Đang dùng Oracle Function FUNC_GET_FINAL_SYSTEM_REVENUE để tính doanh thu cuối cùng."
+            );
+        } else {
+            btnToggleRevenueFunction.setText("Function: OFF");
+            btnToggleRevenueFunction.setBackground(red);
+            btnToggleRevenueFunction.setToolTipText(
+                    "Đang dùng Java SQL rời rạc để tính doanh thu cuối cùng."
+            );
+        }
+
+        btnToggleRevenueFunction.repaint();
     }
 
     private JButton createPrimaryButton(String text, Color bgColor) {
@@ -769,16 +802,43 @@ public class AdminSystemPanel extends JPanel {
     }
 
     private void reloadImportSalesEfficiencyCards() {
-        ImportSalesEfficiencySql.EfficiencySummary summary
-                = ImportSalesEfficiencySql.getInstance()
-                        .selectSummaryForAdmin(filterFrom, filterTo);
+        double totalRevenue = getTotalSalesByJava(filterFrom, filterTo);
+        double totalImportCost = getTotalImportCostByJava(filterFrom, filterTo);
 
-        lblMonthRevenue.setText(money(summary.totalRevenue));
-        lblMonthImportCost.setText(money(summary.totalImportCost));
-        lblGrossProfit.setText(money(summary.grossProfit));
-        lblGrossProfitMargin.setText(percent(summary.grossProfitMargin));
+        double finalRevenue;
 
-        lblGrossProfit.setForeground(summary.grossProfit < 0 ? red : green);
+        if (useDbFunctionRevenue) {
+            /*
+         * MỨC 2 - ĐÃ ỨNG DỤNG FUNCTION:
+         * Java gọi Oracle Function FUNC_GET_FINAL_SYSTEM_REVENUE.
+             */
+            double functionResult = getFinalRevenueByFunction(filterFrom, filterTo);
+
+            if (functionResult == -1) {
+                finalRevenue = totalRevenue - totalImportCost;
+                lblGrossProfit.setText("Function lỗi");
+                lblGrossProfit.setForeground(red);
+            } else {
+                finalRevenue = functionResult;
+                lblGrossProfit.setText(money(finalRevenue));
+                lblGrossProfit.setForeground(finalRevenue < 0 ? red : green);
+            }
+
+        } else {
+            /*
+         * MỨC 1 - CHƯA ỨNG DỤNG FUNCTION:
+         * Java tự tính bằng SQL rời rạc.
+             */
+            finalRevenue = totalRevenue - totalImportCost;
+            lblGrossProfit.setText(money(finalRevenue));
+            lblGrossProfit.setForeground(finalRevenue < 0 ? red : green);
+        }
+
+        lblMonthRevenue.setText(money(totalRevenue));
+        lblMonthImportCost.setText(money(totalImportCost));
+
+        double margin = totalRevenue == 0 ? 0 : (finalRevenue / totalRevenue) * 100.0;
+        lblGrossProfitMargin.setText(percent(margin));
     }
 
     private void reloadImportSalesEfficiencyByStore(JTable targetTable) {
@@ -789,107 +849,121 @@ public class AdminSystemPanel extends JPanel {
         DefaultTableModel model = (DefaultTableModel) targetTable.getModel();
         model.setRowCount(0);
 
-        List<ImportSalesEfficiencySql.EfficiencyRow> rows
-                = ImportSalesEfficiencySql.getInstance()
-                        .selectByStoreForAdmin(filterFrom, filterTo);
+        double totalRevenue = getTotalSalesByJava(filterFrom, filterTo);
+        double totalImportCost = getTotalImportCostByJava(filterFrom, filterTo);
 
-        for (ImportSalesEfficiencySql.EfficiencyRow row : rows) {
-            model.addRow(new Object[]{
-                row.storeId,
-                row.storeName,
-                row.totalOrders,
-                money(row.totalRevenue),
-                money(row.totalImportCost),
-                money(row.grossProfit),
-                percent(row.grossProfitMargin)
-            });
+        double finalRevenue = useDbFunctionRevenue
+                ? getFinalRevenueByFunction(filterFrom, filterTo)
+                : totalRevenue - totalImportCost;
+
+        if (finalRevenue == -1) {
+            finalRevenue = totalRevenue - totalImportCost;
         }
+
+        long totalOrders = countOrdersByFilter();
+        double margin = totalRevenue == 0 ? 0 : (finalRevenue / totalRevenue) * 100.0;
+
+        model.addRow(new Object[]{
+            "ALL",
+            useDbFunctionRevenue ? "Toàn hệ thống - Function ON" : "Toàn hệ thống - Function OFF",
+            totalOrders,
+            money(totalRevenue),
+            money(totalImportCost),
+            money(finalRevenue),
+            percent(margin)
+        });
     }
 
     private void reloadCards() {
         lblStoreTotal.setText(String.valueOf(scalarLong("""
-            SELECT COUNT(*)
-            FROM STORES
-            WHERE NVL(is_deleted, 0) = 0
-        """)));
+        SELECT COUNT(*)
+        FROM STORES
+        WHERE NVL(is_deleted, 0) = 0
+    """)));
 
         lblStoreActive.setText(String.valueOf(scalarLong("""
-            SELECT COUNT(*)
-            FROM STORES
-            WHERE NVL(is_deleted, 0) = 0
-        """)));
+        SELECT COUNT(*)
+        FROM STORES
+        WHERE NVL(is_deleted, 0) = 0
+    """)));
 
         lblTodayRevenue.setText(money(scalarDouble("""
-            SELECT NVL(SUM(o.total_amount), 0)
-            FROM STORES s
-            JOIN ORDERS o
-                ON o.store_id = s.store_id
-               AND NVL(o.is_deleted, 0) = 0
-               AND TRUNC(o.order_date) = TRUNC(SYSDATE)
-               AND (
-                    UPPER(NVL(o.status, '')) = 'COMPLETED'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-               )
-            WHERE NVL(s.is_deleted, 0) = 0
-        """)));
+        SELECT NVL(SUM(o.total_amount), 0)
+        FROM ORDERS o
+        WHERE NVL(o.is_deleted, 0) = 0
+          AND TRUNC(o.order_date) = TRUNC(SYSDATE)
+          AND (
+                UPPER(NVL(o.status, '')) = 'COMPLETED'
+                OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                OR UPPER(NVL(o.status, '')) = 'PAID'
+                OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+          )
+    """)));
 
-        // lblMonthRevenue được cập nhật theo filter trong reloadImportSalesEfficiencyCards().
         lblOrderTotal.setText(String.valueOf(countOrdersByFilter()));
 
         lblLowStock.setText(String.valueOf(scalarLong("""
-            SELECT COUNT(*)
-            FROM INVENTORY
-            WHERE NVL(is_deleted, 0) = 0
-              AND NVL(quantity, 0) <= 20
-        """)));
+        SELECT COUNT(*)
+        FROM INVENTORY
+        WHERE NVL(is_deleted, 0) = 0
+          AND NVL(quantity, 0) <= 20
+    """)));
 
-        lblOnlineSessions.setText(String.valueOf(scalarLong("""
-            SELECT COUNT(*)
-            FROM ACCOUNT_SESSIONS
-            WHERE status = 'ACTIVE'
-              AND NVL(is_deleted, 0) = 0
-              AND last_heartbeat_at >= SYSTIMESTAMP - INTERVAL '30' SECOND
-        """)));
+        /*
+     * HQT_DEMO hiện chưa có bảng ACCOUNT_SESSIONS,
+     * nên không query để tránh ORA-00942.
+         */
+        lblOnlineSessions.setText("0");
     }
 
     private void reloadRevenueByStore(JTable targetTable) {
-        fillTable(targetTable, """
-            SELECT s.store_id,
-                   NVL(s.store_name, s.address) AS store_name,
-                   COUNT(o.order_id) AS total_orders,
-                   NVL(SUM(o.total_amount), 0) AS revenue
-            FROM STORES s
-            LEFT JOIN ORDERS o
-                ON o.store_id = s.store_id
-               AND NVL(o.is_deleted, 0) = 0
-               AND TRUNC(o.order_date, 'MM') = TRUNC(SYSDATE, 'MM')
-               AND (
-                    UPPER(NVL(o.status, '')) = 'COMPLETED'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-               )
-            WHERE NVL(s.is_deleted, 0) = 0
-            GROUP BY s.store_id, NVL(s.store_name, s.address)
-            ORDER BY revenue DESC, s.store_id
-        """, 4, true);
+        if (targetTable == null) {
+            return;
+        }
+
+        DefaultTableModel model = (DefaultTableModel) targetTable.getModel();
+        model.setRowCount(0);
+
+        double totalRevenue = getTotalSalesByJava(filterFrom, filterTo);
+        double totalImportCost = getTotalImportCostByJava(filterFrom, filterTo);
+
+        double finalRevenue = useDbFunctionRevenue
+                ? getFinalRevenueByFunction(filterFrom, filterTo)
+                : totalRevenue - totalImportCost;
+
+        if (finalRevenue == -1) {
+            finalRevenue = totalRevenue - totalImportCost;
+        }
+
+        long totalOrders = countOrdersByFilter();
+        double margin = totalRevenue == 0 ? 0 : (finalRevenue / totalRevenue) * 100.0;
+
+        model.addRow(new Object[]{
+            "ALL",
+            useDbFunctionRevenue ? "Toàn hệ thống - Function ON" : "Toàn hệ thống - Function OFF",
+            totalOrders,
+            money(totalRevenue),
+            money(totalImportCost),
+            money(finalRevenue),
+            percent(margin)
+        });
     }
 
     private void reloadInventoryByStore(JTable targetTable) {
         fillTable(targetTable, """
-            SELECT s.store_id,
-                   NVL(s.store_name, s.address) AS store_name,
-                   COUNT(DISTINCT i.product_id) AS product_count,
-                   NVL(SUM(NVL(i.quantity, 0)), 0) AS total_stock,
-                   SUM(CASE WHEN NVL(i.quantity, 0) <= 20 THEN 1 ELSE 0 END) AS low_stock
-            FROM STORES s
-            LEFT JOIN INVENTORY i
-                ON i.store_id = s.store_id
-               AND NVL(i.is_deleted, 0) = 0
-            WHERE NVL(s.is_deleted, 0) = 0
-            GROUP BY s.store_id, NVL(s.store_name, s.address)
-            ORDER BY s.store_id
-        """, 5, false);
+        SELECT i.store_id,
+               'Chi nhánh ' || i.store_id AS store_name,
+               COUNT(DISTINCT i.product_id) AS product_count,
+               NVL(SUM(NVL(i.quantity, 0)), 0) AS total_stock,
+               SUM(CASE WHEN NVL(i.quantity, 0) <= 20 THEN 1 ELSE 0 END) AS low_stock
+        FROM INVENTORY i
+        WHERE NVL(i.is_deleted, 0) = 0
+        GROUP BY i.store_id
+        ORDER BY i.store_id
+    """, 5, false);
     }
 
     private void reloadTopEmployee() {
@@ -900,73 +974,116 @@ public class AdminSystemPanel extends JPanel {
         DefaultTableModel model = (DefaultTableModel) tblTopEmployee.getModel();
         model.setRowCount(0);
 
+        model.addRow(new Object[]{
+            "ALL",
+            "-",
+            "Không áp dụng trong schema HQT_DEMO",
+            0,
+            money(0)
+        });
+    }
+
+    private double getTotalSalesByJava(LocalDateTime from, LocalDateTime to) {
         String sql = """
-            SELECT *
-            FROM (
-                SELECT NVL(s.store_name, e.store_id) AS store_name,
-                       e.employee_id,
-                       e.employee_name,
-                       COUNT(o.order_id) AS total_orders,
-                       NVL(SUM(o.total_amount), 0) AS revenue
-                FROM EMPLOYEES e
-                LEFT JOIN STORES s
-                    ON s.store_id = e.store_id
-                LEFT JOIN ORDERS o
-                    ON o.employee_id = e.employee_id
-                   AND o.store_id = e.store_id
-                   AND NVL(o.is_deleted, 0) = 0
-                   AND o.order_date >= ?
-                   AND o.order_date < ?
-                   AND (
-                        UPPER(NVL(o.status, '')) = 'COMPLETED'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-                   )
-                WHERE NVL(e.is_deleted, 0) = 0
-                  AND e.role_id IN ('R_STAFF_SALE', 'R_STAFF_VIEW_PROD')
-                GROUP BY NVL(s.store_name, e.store_id), e.employee_id, e.employee_name
-                ORDER BY revenue DESC, total_orders DESC
-            )
-            WHERE ROWNUM <= 10
-        """;
+        SELECT NVL(SUM(o.total_amount), 0)
+        FROM ORDERS o
+        WHERE NVL(o.is_deleted, 0) = 0
+          AND (
+                UPPER(NVL(o.status, '')) = 'COMPLETED'
+                OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                OR UPPER(NVL(o.status, '')) = 'PAID'
+                OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+              )
+          AND o.order_date >= ?
+          AND o.order_date < ?
+    """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
-
-            ps.setTimestamp(1, Timestamp.valueOf(filterFrom));
-            ps.setTimestamp(2, Timestamp.valueOf(filterTo));
+        try (
+                Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setTimestamp(1, Timestamp.valueOf(from));
+            ps.setTimestamp(2, Timestamp.valueOf(to));
 
             try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    model.addRow(new Object[]{
-                        rs.getString("store_name"),
-                        rs.getString("employee_id"),
-                        rs.getString("employee_name"),
-                        rs.getLong("total_orders"),
-                        money(rs.getDouble("revenue"))
-                    });
+                if (rs.next()) {
+                    return rs.getDouble(1);
                 }
             }
+
         } catch (Exception ex) {
-            System.err.println("[AdminSystemPanel] reloadTopEmployee error: " + ex.getMessage());
+            System.err.println("[AdminSystemPanel] getTotalSalesByJava error: " + ex.getMessage());
         }
+
+        return 0;
+    }
+
+    private double getTotalImportCostByJava(LocalDateTime from, LocalDateTime to) {
+        String sql = """
+        SELECT NVL(SUM(pr.total_after_tax), 0)
+        FROM PURCHASE_RECEIPTS pr
+        WHERE NVL(pr.is_deleted, 0) = 0
+          AND pr.created_at >= ?
+          AND pr.created_at < ?
+    """;
+
+        try (
+                Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setTimestamp(1, Timestamp.valueOf(from));
+            ps.setTimestamp(2, Timestamp.valueOf(to));
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getDouble(1);
+                }
+            }
+
+        } catch (Exception ex) {
+            System.err.println("[AdminSystemPanel] getTotalImportCostByJava error: " + ex.getMessage());
+        }
+
+        return 0;
+    }
+
+    private double getFinalRevenueByFunction(LocalDateTime from, LocalDateTime to) {
+        String sql = """
+        SELECT FUNC_GET_FINAL_SYSTEM_REVENUE(?, ?) AS final_revenue
+        FROM dual
+    """;
+
+        try (
+                Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setDate(1, java.sql.Date.valueOf(from.toLocalDate()));
+            ps.setDate(2, java.sql.Date.valueOf(to.minusSeconds(1).toLocalDate()));
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getDouble("final_revenue");
+                }
+            }
+
+        } catch (Exception ex) {
+            System.err.println("[AdminSystemPanel] getFinalRevenueByFunction error: " + ex.getMessage());
+        }
+
+        return -1;
     }
 
     private void reloadLowStock() {
         fillTable(tblLowStock, """
-            SELECT NVL(s.store_name, i.store_id) AS store_name,
-                   i.product_id,
-                   p.product_name,
-                   NVL(i.quantity, 0) AS quantity,
-                   20 AS min_quantity
-            FROM INVENTORY i
-            LEFT JOIN PRODUCTS p
-                ON p.product_id = i.product_id
-            LEFT JOIN STORES s
-                ON s.store_id = i.store_id
-            WHERE NVL(i.is_deleted, 0) = 0
-              AND NVL(i.quantity, 0) <= 20
-            ORDER BY NVL(i.quantity, 0) ASC
-        """, 5, false);
+        SELECT 'Chi nhánh ' || i.store_id AS store_name,
+               i.product_id,
+               p.product_name,
+               NVL(i.quantity, 0) AS quantity,
+               20 AS min_quantity
+        FROM INVENTORY i
+        LEFT JOIN PRODUCTS p
+            ON p.product_id = i.product_id
+        WHERE NVL(i.is_deleted, 0) = 0
+          AND NVL(i.quantity, 0) <= 20
+        ORDER BY NVL(i.quantity, 0) ASC
+    """, 5, false);
     }
 
     private void exportSystemReport() {
@@ -1008,22 +1125,23 @@ public class AdminSystemPanel extends JPanel {
     private long countOrdersByFilter() {
         String sql = """
         SELECT COUNT(*)
-        FROM STORES s
-        JOIN ORDERS o
-            ON o.store_id = s.store_id
-           AND NVL(o.is_deleted, 0) = 0
-           AND o.order_date >= ?
-           AND o.order_date < ?
-           AND (
+        FROM ORDERS o
+        WHERE NVL(o.is_deleted, 0) = 0
+          AND o.order_date >= ?
+          AND o.order_date < ?
+          AND (
                 UPPER(NVL(o.status, '')) = 'COMPLETED'
+                OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                OR UPPER(NVL(o.status, '')) = 'PAID'
                 OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
                 OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-           )
-        WHERE NVL(s.is_deleted, 0) = 0
+                OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+              )
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
-
+        try (
+                Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
             ps.setTimestamp(1, Timestamp.valueOf(filterFrom));
             ps.setTimestamp(2, Timestamp.valueOf(filterTo));
 
@@ -1083,90 +1201,34 @@ public class AdminSystemPanel extends JPanel {
     private BufferedImage createFinalRevenueChartImage() {
         DefaultCategoryDataset dataset = new DefaultCategoryDataset();
 
-        double maxAbsMillion = 0.0;
-        boolean hasData = false;
+        double totalRevenue = getTotalSalesByJava(filterFrom, filterTo);
+        double totalImportCost = getTotalImportCostByJava(filterFrom, filterTo);
 
-        String sql = """
-            SELECT s.store_id,
-                   NVL(s.store_name, s.address) AS store_name,
-                   NVL(sales.total_revenue, 0) AS total_revenue,
-                   NVL(imports.total_import_cost, 0) AS total_import_cost,
-                   NVL(sales.total_revenue, 0) - NVL(imports.total_import_cost, 0) AS gross_profit
-            FROM stores s
-            LEFT JOIN (
-                SELECT store_id,
-                       SUM(total_amount) AS total_revenue
-                FROM orders
-                WHERE NVL(is_deleted, 0) = 0
-                  AND order_date >= ?
-                  AND order_date < ?
-                  AND (
-                       UPPER(NVL(status, '')) = 'COMPLETED'
-                       OR UPPER(NVL(status, '')) LIKE '%HOÀN THÀNH%'
-                       OR UPPER(NVL(status, '')) LIKE '%HOAN THANH%'
-                  )
-                GROUP BY store_id
-            ) sales
-                ON sales.store_id = s.store_id
-            LEFT JOIN (
-                SELECT store_id,
-                       SUM(total_after_tax) AS total_import_cost
-                FROM purchase_receipts
-                WHERE NVL(is_deleted, 0) = 0
-                  AND created_at >= ?
-                  AND created_at < ?
-                GROUP BY store_id
-            ) imports
-                ON imports.store_id = s.store_id
-            WHERE NVL(s.is_deleted, 0) = 0
-            ORDER BY total_revenue DESC, gross_profit DESC, s.store_id
-        """;
+        double finalRevenue = useDbFunctionRevenue
+                ? getFinalRevenueByFunction(filterFrom, filterTo)
+                : totalRevenue - totalImportCost;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
-
-            ps.setTimestamp(1, Timestamp.valueOf(filterFrom));
-            ps.setTimestamp(2, Timestamp.valueOf(filterTo));
-            ps.setTimestamp(3, Timestamp.valueOf(filterFrom));
-            ps.setTimestamp(4, Timestamp.valueOf(filterTo));
-
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    String storeName = rs.getString("store_name");
-                    if (storeName == null || storeName.trim().isEmpty()) {
-                        storeName = rs.getString("store_id");
-                    }
-                    if (storeName.length() > 18) {
-                        storeName = storeName.substring(0, 18) + "...";
-                    }
-
-                    double revenueMillion = rs.getDouble("total_revenue") / 1_000_000.0;
-                    double importMillion = rs.getDouble("total_import_cost") / 1_000_000.0;
-                    double grossProfitMillion = rs.getDouble("gross_profit") / 1_000_000.0;
-
-                    dataset.addValue(revenueMillion, "Doanh thu", storeName);
-                    dataset.addValue(importMillion, "Tiền nhập", storeName);
-                    dataset.addValue(grossProfitMillion, "Lãi gộp", storeName);
-
-                    maxAbsMillion = Math.max(maxAbsMillion, Math.abs(revenueMillion));
-                    maxAbsMillion = Math.max(maxAbsMillion, Math.abs(importMillion));
-                    maxAbsMillion = Math.max(maxAbsMillion, Math.abs(grossProfitMillion));
-                    hasData = true;
-                }
-            }
-        } catch (Exception ex) {
-            System.err.println("[AdminSystemPanel] createFinalRevenueChartImage error: " + ex.getMessage());
+        if (finalRevenue == -1) {
+            finalRevenue = totalRevenue - totalImportCost;
         }
 
-        if (!hasData) {
-            dataset.addValue(0, "Doanh thu", "Không có dữ liệu");
-            dataset.addValue(0, "Tiền nhập", "Không có dữ liệu");
-            dataset.addValue(0, "Lãi gộp", "Không có dữ liệu");
+        double revenueMillion = totalRevenue / 1_000_000.0;
+        double importMillion = totalImportCost / 1_000_000.0;
+        double finalMillion = finalRevenue / 1_000_000.0;
+
+        dataset.addValue(revenueMillion, "Doanh thu bán hàng", "Toàn hệ thống");
+        dataset.addValue(importMillion, "Tiền nhập hàng", "Toàn hệ thống");
+        dataset.addValue(finalMillion, useDbFunctionRevenue ? "Doanh thu cuối cùng (Function)" : "Doanh thu cuối cùng (Java)", "Toàn hệ thống");
+
+        double maxAbsMillion = Math.max(Math.abs(revenueMillion), Math.abs(importMillion));
+        maxAbsMillion = Math.max(maxAbsMillion, Math.abs(finalMillion));
+        if (maxAbsMillion <= 0) {
             maxAbsMillion = 10;
         }
 
         JFreeChart chart = ChartFactory.createBarChart(
                 null,
-                "Chi nhánh",
+                "Phạm vi",
                 "Giá trị (triệu VND)",
                 dataset,
                 PlotOrientation.VERTICAL,
@@ -1183,15 +1245,7 @@ public class AdminSystemPanel extends JPanel {
         }
 
         CategoryPlot plot = chart.getCategoryPlot();
-        plot.setBackgroundPaint(new Color(248, 250, 252));
-        plot.setOutlinePaint(new Color(71, 85, 105));
-        plot.setOutlineStroke(new BasicStroke(1.3f));
-        plot.setRangeGridlinesVisible(true);
-        plot.setRangeGridlinePaint(new Color(148, 163, 184));
-        plot.setRangeGridlineStroke(new BasicStroke(1.15f));
-        plot.setDomainGridlinesVisible(true);
-        plot.setDomainGridlinePaint(new Color(203, 213, 225));
-        plot.setDomainGridlineStroke(new BasicStroke(0.9f));
+        applyStrongCategoryGrid(plot);
 
         CategoryAxis domainAxis = plot.getDomainAxis();
         domainAxis.setTickLabelFont(new Font("Segoe UI", Font.BOLD, 12));
@@ -1201,7 +1255,7 @@ public class AdminSystemPanel extends JPanel {
         domainAxis.setUpperMargin(0.06);
 
         NumberAxis rangeAxis = (NumberAxis) plot.getRangeAxis();
-        double upper = maxAbsMillion <= 0 ? 10 : maxAbsMillion * 1.25;
+        double upper = maxAbsMillion * 1.25;
         rangeAxis.setRange(-upper, upper);
         rangeAxis.setTickUnit(new NumberTickUnit(niceTickUnit(upper)));
         rangeAxis.setNumberFormatOverride(new DecimalFormat("#,##0.#"));
@@ -1221,6 +1275,8 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 650);
     }
 
+
+
     @SuppressWarnings("deprecation")
     private BufferedImage createProductRevenuePie3DChartImage() {
         DefaultPieDataset dataset = new DefaultPieDataset();
@@ -1230,25 +1286,25 @@ public class AdminSystemPanel extends JPanel {
             FROM (
                 SELECT p.product_name AS product_name,
                        SUM(od.quantity * od.unit_price) AS revenue
-                FROM stores s
-                JOIN orders o
-                    ON o.store_id = s.store_id
-                   AND NVL(o.is_deleted, 0) = 0
-                   AND o.store_id IS NOT NULL
-                   AND o.order_date >= ?
-                   AND o.order_date < ?
-                   AND (
-                        UPPER(NVL(o.status, '')) = 'COMPLETED'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-                   )
+                FROM orders o
                 JOIN order_details od
                     ON od.order_id = o.order_id
                    AND NVL(od.is_deleted, 0) = 0
                 JOIN products p
                     ON p.product_id = od.product_id
                    AND NVL(p.is_deleted, 0) = 0
-                WHERE NVL(s.is_deleted, 0) = 0
+                WHERE NVL(o.is_deleted, 0) = 0
+                  AND o.order_date >= ?
+                  AND o.order_date < ?
+                  AND (
+                        UPPER(NVL(o.status, '')) = 'COMPLETED'
+                        OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                        OR UPPER(NVL(o.status, '')) = 'PAID'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+                  )
                 GROUP BY p.product_name
                 ORDER BY revenue DESC
             )
@@ -1276,6 +1332,10 @@ public class AdminSystemPanel extends JPanel {
             }
         } catch (Exception e) {
             System.err.println("[AdminSystemPanel] createProductRevenuePie3DChartImage error: " + e.getMessage());
+        }
+
+        if (dataset.getItemCount() == 0) {
+            dataset.setValue("Không có dữ liệu", 1);
         }
 
         JFreeChart chart = ChartFactory.createPieChart3D(
@@ -1315,6 +1375,8 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 620);
     }
 
+
+
     private BufferedImage createRevenueOrderDifferenceChartImage() {
         XYSeries currentPeriodSeries = new XYSeries("Kỳ đang lọc");
         XYSeries previousPeriodSeries = new XYSeries("Kỳ liền trước");
@@ -1324,49 +1386,49 @@ public class AdminSystemPanel extends JPanel {
         LocalDateTime previousTo = filterFrom;
 
         String sql = """
-        SELECT period_type,
-               day_no,
-               NVL(SUM(revenue), 0) AS revenue
-        FROM (
-            SELECT 'CURRENT' AS period_type,
-                   TRUNC(o.order_date) - TRUNC(?) + 1 AS day_no,
-                   o.total_amount AS revenue
-            FROM stores s
-            JOIN orders o
-                ON o.store_id = s.store_id
-               AND NVL(o.is_deleted, 0) = 0
-               AND o.store_id IS NOT NULL
-               AND o.order_date >= ?
-               AND o.order_date < ?
-               AND (
-                    UPPER(NVL(o.status, '')) = 'COMPLETED'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-               )
-            WHERE NVL(s.is_deleted, 0) = 0
+            SELECT period_type,
+                   day_no,
+                   NVL(SUM(revenue), 0) AS revenue
+            FROM (
+                SELECT 'CURRENT' AS period_type,
+                       TRUNC(o.order_date) - TRUNC(?) + 1 AS day_no,
+                       o.total_amount AS revenue
+                FROM orders o
+                WHERE NVL(o.is_deleted, 0) = 0
+                  AND o.order_date >= ?
+                  AND o.order_date < ?
+                  AND (
+                        UPPER(NVL(o.status, '')) = 'COMPLETED'
+                        OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                        OR UPPER(NVL(o.status, '')) = 'PAID'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+                  )
 
-            UNION ALL
+                UNION ALL
 
-            SELECT 'PREVIOUS' AS period_type,
-                   TRUNC(o.order_date) - TRUNC(?) + 1 AS day_no,
-                   o.total_amount AS revenue
-            FROM stores s
-            JOIN orders o
-                ON o.store_id = s.store_id
-               AND NVL(o.is_deleted, 0) = 0
-               AND o.store_id IS NOT NULL
-               AND o.order_date >= ?
-               AND o.order_date < ?
-               AND (
-                    UPPER(NVL(o.status, '')) = 'COMPLETED'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                    OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-               )
-            WHERE NVL(s.is_deleted, 0) = 0
-        )
-        GROUP BY period_type, day_no
-        ORDER BY day_no, period_type
-    """;
+                SELECT 'PREVIOUS' AS period_type,
+                       TRUNC(o.order_date) - TRUNC(?) + 1 AS day_no,
+                       o.total_amount AS revenue
+                FROM orders o
+                WHERE NVL(o.is_deleted, 0) = 0
+                  AND o.order_date >= ?
+                  AND o.order_date < ?
+                  AND (
+                        UPPER(NVL(o.status, '')) = 'COMPLETED'
+                        OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                        OR UPPER(NVL(o.status, '')) = 'PAID'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+                  )
+            )
+            GROUP BY period_type, day_no
+            ORDER BY day_no, period_type
+        """;
 
         double maxRevenueMillion = 0;
         int minDay = 32;
@@ -1471,6 +1533,8 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 650);
     }
 
+
+
     private BufferedImage createRevenueOrderLineChartImage() {
         DefaultCategoryDataset revenueDataset = new DefaultCategoryDataset();
         DefaultCategoryDataset orderDataset = new DefaultCategoryDataset();
@@ -1479,26 +1543,27 @@ public class AdminSystemPanel extends JPanel {
         int maxOrderCount = 0;
 
         String sql = """
-        SELECT s.store_id,
-               NVL(s.store_name, s.address) AS store_name,
-               NVL(SUM(o.total_amount), 0) AS revenue,
-               COUNT(o.order_id) AS order_count
-        FROM stores s
-        LEFT JOIN orders o
-            ON o.store_id = s.store_id
-           AND NVL(o.is_deleted, 0) = 0
-           AND o.store_id IS NOT NULL
-           AND o.order_date >= ?
-           AND o.order_date < ?
-           AND (
-                UPPER(NVL(o.status, '')) = 'COMPLETED'
-                OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-           )
-        WHERE NVL(s.is_deleted, 0) = 0
-        GROUP BY s.store_id, NVL(s.store_name, s.address)
-        ORDER BY revenue DESC, s.store_id
-    """;
+            SELECT TRUNC(o.order_date) AS sale_day,
+                   NVL(SUM(o.total_amount), 0) AS revenue,
+                   COUNT(o.order_id) AS order_count
+            FROM orders o
+            WHERE NVL(o.is_deleted, 0) = 0
+              AND o.order_date >= ?
+              AND o.order_date < ?
+              AND (
+                    UPPER(NVL(o.status, '')) = 'COMPLETED'
+                    OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                    OR UPPER(NVL(o.status, '')) = 'PAID'
+                    OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                    OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                    OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                    OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+              )
+            GROUP BY TRUNC(o.order_date)
+            ORDER BY sale_day
+        """;
+
+        SimpleDateFormat labelFmt = new SimpleDateFormat("dd/MM");
 
         try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
 
@@ -1507,20 +1572,14 @@ public class AdminSystemPanel extends JPanel {
 
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    String storeName = rs.getString("store_name");
-                    if (storeName == null || storeName.trim().isEmpty()) {
-                        storeName = rs.getString("store_id");
-                    }
-
-                    if (storeName.length() > 18) {
-                        storeName = storeName.substring(0, 18) + "...";
-                    }
+                    Date saleDay = rs.getDate("sale_day");
+                    String dayLabel = saleDay == null ? "Không rõ" : labelFmt.format(saleDay);
 
                     double revenueMillion = rs.getDouble("revenue") / 1_000_000.0;
                     int orderCount = rs.getInt("order_count");
 
-                    revenueDataset.addValue(revenueMillion, "Doanh thu", storeName);
-                    orderDataset.addValue(orderCount, "Số đơn", storeName);
+                    revenueDataset.addValue(revenueMillion, "Doanh thu", dayLabel);
+                    orderDataset.addValue(orderCount, "Số đơn", dayLabel);
 
                     maxRevenueMillion = Math.max(maxRevenueMillion, revenueMillion);
                     maxOrderCount = Math.max(maxOrderCount, orderCount);
@@ -1530,9 +1589,14 @@ public class AdminSystemPanel extends JPanel {
             System.err.println("[AdminSystemPanel] createRevenueOrderLineChartImage error: " + e.getMessage());
         }
 
+        if (revenueDataset.getColumnCount() == 0) {
+            revenueDataset.addValue(0, "Doanh thu", "Không có dữ liệu");
+            orderDataset.addValue(0, "Số đơn", "Không có dữ liệu");
+        }
+
         JFreeChart chart = ChartFactory.createBarChart(
                 null,
-                "Chi nhánh",
+                "Ngày",
                 "Doanh thu (triệu VND)",
                 revenueDataset,
                 PlotOrientation.VERTICAL,
@@ -1591,6 +1655,8 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 650);
     }
 
+
+
     private BufferedImage createProductBubbleChartImage() {
         XYSeriesCollection dataset = new XYSeriesCollection();
         List<Double> bubbleSizes = new ArrayList<>();
@@ -1605,25 +1671,25 @@ public class AdminSystemPanel extends JPanel {
                        SUM(od.quantity) AS quantity_sold,
                        SUM(od.quantity * od.unit_price) AS revenue,
                        COUNT(DISTINCT o.order_id) AS bubble_size
-                FROM stores s
-                JOIN orders o
-                    ON o.store_id = s.store_id
-                   AND NVL(o.is_deleted, 0) = 0
-                   AND o.store_id IS NOT NULL
-                   AND o.order_date >= ?
-                   AND o.order_date < ?
-                   AND (
-                        UPPER(NVL(o.status, '')) = 'COMPLETED'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-                   )
+                FROM orders o
                 JOIN order_details od
                     ON od.order_id = o.order_id
                    AND NVL(od.is_deleted, 0) = 0
                 JOIN products p
                     ON p.product_id = od.product_id
                    AND NVL(p.is_deleted, 0) = 0
-                WHERE NVL(s.is_deleted, 0) = 0
+                WHERE NVL(o.is_deleted, 0) = 0
+                  AND o.order_date >= ?
+                  AND o.order_date < ?
+                  AND (
+                        UPPER(NVL(o.status, '')) = 'COMPLETED'
+                        OR UPPER(NVL(o.status, '')) = 'SUCCESS'
+                        OR UPPER(NVL(o.status, '')) = 'PAID'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                        OR UPPER(NVL(o.status, '')) LIKE '%DA THANH TOAN%'
+                  )
                 GROUP BY p.product_name
                 ORDER BY revenue DESC
             )
@@ -1727,6 +1793,8 @@ public class AdminSystemPanel extends JPanel {
 
         return chart.createBufferedImage(1200, 650);
     }
+
+
 
     private String safeText(JLabel label) {
         return label == null || label.getText() == null ? "0" : label.getText();

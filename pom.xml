@@ -172,5 +172,5 @@
             </plugin>
         </plugins>
     </build>
-    
+    <name>SieuThiOnline_HQTCSDL</name>
 </project>

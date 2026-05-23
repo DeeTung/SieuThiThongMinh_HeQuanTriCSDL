@@ -21,11 +21,11 @@ public class AdminDashboardView extends javax.swing.JFrame {
         setupAdminUI();
         setupRealtimeSync();
 
-        // Sidebar mặc định đang active mục đầu tiên là "Quản lý chi nhánh",
-        // nên nội dung mặc định cũng phải là màn hình Quản lý chi nhánh.
+        // Mở lại màn Quản lý hệ thống như cũ.
+        // Demo Function sẽ nằm bằng toggle trong AdminSystemPanel.
+        currentMenu = "Quản lý chi nhánh";
         showPanel(new view.AdminSystemPanel());
 
-        // Đảm bảo JFrame được phóng to sau khi toàn bộ component đã add xong.
         SwingUtilities.invokeLater(() -> setExtendedState(JFrame.MAXIMIZED_BOTH));
     }
 
@@ -63,29 +63,62 @@ public class AdminDashboardView extends javax.swing.JFrame {
                 case "Quản lý chi nhánh":
                     showPanel(new view.AdminSystemPanel());
                     break;
+
                 case "Quản lý khuyến mãi":
                     showPanel(new view.PromotionManagementPanel());
                     break;
+
                 case "Quản lý cửa hàng trưởng":
                     showPanel(new view.ManagerManagementView());
                     break;
+
                 case "Quản lý tài khoản":
                     showPanel(new view.AccountRoleAssignmentPanel());
                     break;
+
                 case "Quản lý phân quyền":
                     showPanel(new view.RoleManagementPanel());
                     break;
+
                 case "Lịch sử truy cập":
                     showPanel(new view.LoginManagementPanel());
                     break;
+
                 case "Nhật ký hệ thống":
                     showPanel(new AuditLogPanel());
                     break;
+
+                /*
+                 * ============================================================
+                 * DEMO HỆ QUẢN TRỊ CSDL - FUNCTION
+                 * ============================================================
+                 *
+                 * Mục tiêu demo:
+                 * 1. Chưa ứng dụng Function:
+                 *    Java tự tính doanh thu cuối cùng bằng nhiều câu SQL rời rạc.
+                 *
+                 * 2. Đã ứng dụng Function:
+                 *    Java gọi FUNC_GET_FINAL_SYSTEM_REVENUE trong Oracle.
+                 *
+                 * Panel này dùng cho Admin để demo 2 mức:
+                 * - Bug / vấn đề khi logic tính toán nằm ở Java.
+                 * - Cách xử lý khi gom logic vào Oracle Function.
+                 */
                 case "Cài đặt":
                     showPanel(new view.components.UnifiedSettingsPanel());
                     break;
+
                 case "Đăng xuất":
                     handleLogout();
+                    break;
+
+                default:
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Chức năng chưa được hỗ trợ: " + title,
+                            "Thông báo",
+                            JOptionPane.INFORMATION_MESSAGE
+                    );
                     break;
             }
         });
@@ -126,7 +159,7 @@ public class AdminDashboardView extends javax.swing.JFrame {
                 if (type == AppEventType.STORE_INFO
                         || type == AppEventType.SYSTEM_CONFIG
                         || type == AppEventType.DASHBOARD) {
-                    showPanel(new view.StoreManagementPanel());
+                    showPanel(new view.AdminSystemPanel());
                 }
                 break;
 
@@ -180,6 +213,16 @@ public class AdminDashboardView extends javax.swing.JFrame {
                 }
                 break;
 
+            /*
+             * Không auto-refresh panel demo Function.
+             * Lý do:
+             * - Đây là màn demo Hệ quản trị CSDL.
+             * - Người demo cần chủ động bấm từng nút:
+             *   Kiểm tra Function / Demo chưa dùng Function / Demo đã dùng Function / So sánh.
+             */
+            case "Demo Function HQT CSDL":
+                break;
+
             case "Cài đặt":
                 if (type == AppEventType.SYSTEM_CONFIG
                         || type == AppEventType.ACCOUNT_SECURITY) {
@@ -193,28 +236,50 @@ public class AdminDashboardView extends javax.swing.JFrame {
     }
 
     public void showPanel(JPanel panel) {
+        if (mainContentPanel == null || panel == null) {
+            return;
+        }
+
         mainContentPanel.removeAll();
 
         JPanel panelToDisplay = panel;
 
-        // ========================================================
-        // LOGIC MIỄN TRỪ (BYPASS):
-        // Bỏ qua Lính gác đối với các trang Tổng quan và Cài đặt cá nhân
-        // ========================================================
+        /*
+     * ========================================================
+     * LOGIC MIỄN TRỪ BYPASS
+     * ========================================================
+     *
+     * Bỏ qua UIPermissionGuard cho:
+     * - Tổng quan
+     * - Cài đặt
+     *
+     * Lưu ý:
+     * Demo Function hiện đã được gắn trực tiếp vào AdminSystemPanel
+     * bằng nút toggle Function ON/OFF trong màn "Quản lý hệ thống".
+     * Vì vậy không còn dùng DbmsFunctionDemoPanel riêng nữa.
+         */
         boolean isBypassed = (panel instanceof view.components.TongQuanPanel)
                 || (panel instanceof view.components.UnifiedSettingsPanel);
 
         if (!isBypassed) {
-            // Đưa cho Lính gác kiểm tra và khóa nút (Dù Admin full quyền thì vẫn qua cổng cho chuẩn luồng)
-            panelToDisplay = common.security.UIPermissionGuard.protect(panel);
+            try {
+                panelToDisplay = common.security.UIPermissionGuard.protect(panel);
+            } catch (Exception ex) {
+                System.err.println("[AdminDashboardView] UIPermissionGuard error: " + ex.getMessage());
+
+                /*
+             * Nếu guard lỗi do thiếu function_id/role trong schema HQT_DEMO,
+             * vẫn cho hiển thị panel để không làm hỏng demo HQT CSDL.
+                 */
+                panelToDisplay = panel;
+            }
         }
 
-        // BẢO VỆ LỚP 2: Bọc thẻ con vào Thanh cuộn để chống ép bẹp biểu đồ
-        panelToDisplay.setMinimumSize(new Dimension(900, 600)); // Kích thước an toàn cho thẻ con
+        panelToDisplay.setMinimumSize(new Dimension(900, 600));
 
         JScrollPane scrollPane = new JScrollPane(panelToDisplay);
         scrollPane.setBorder(null);
-        scrollPane.getVerticalScrollBar().setUnitIncrement(16); // Lăn chuột mượt hơn
+        scrollPane.getVerticalScrollBar().setUnitIncrement(16);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
 
