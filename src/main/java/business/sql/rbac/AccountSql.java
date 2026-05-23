@@ -1290,6 +1290,24 @@ public class AccountSql implements SqlInterface<Account> {
             return pst.executeUpdate() > 0;
 
         } catch (SQLException e) {
+            // NẾU BẮT ĐƯỢC LỖI TỪ TRIGGER (ORA-20010)
+            if (e.getMessage() != null && e.getMessage().contains("ORA-20010")) {
+
+                // --- THÊM 2 DÒNG NÀY ĐỂ IN LỖI ĐỎ RA CONSOLE CHO THẦY CÔ XEM BẰNG CHỨNG ---
+                System.err.println("========== TRIGGER ROLLBACK HOẠT ĐỘNG ==========");
+                e.printStackTrace(); 
+                // -------------------------------------------------------------------------
+
+                // Cắt bớt phần text rác của Oracle để hiện lên Popup cho đẹp
+                String msg = e.getMessage();
+                int startIndex = msg.indexOf("Loi dang nhap:");
+                if (startIndex != -1) {
+                    int endIndex = msg.indexOf("\n", startIndex);
+                    msg = msg.substring(startIndex, endIndex == -1 ? msg.length() : endIndex);
+                }
+                throw new RuntimeException(msg); // Ném lỗi này lên cho LoginView hiện Popup
+            }
+
             System.err.println("Lỗi AccountSql.updateOnlineStatus: " + e.getMessage());
             e.printStackTrace();
             return false;

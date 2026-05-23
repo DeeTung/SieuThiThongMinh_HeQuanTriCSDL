@@ -78,7 +78,9 @@ public class LoginService {
             System.out.println("[" + LOGIN_VERSION + "] FAIL: WRONG_PASSWORD");
             return null;
         }
-
+        
+        business.sql.rbac.AccountSql.getInstance().setOnline(acc.getAccountId());
+        
         String tokenValue = UUID.randomUUID().toString();
         acc.setToken(tokenValue);
 

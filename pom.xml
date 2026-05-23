@@ -172,5 +172,5 @@
             </plugin>
         </plugins>
     </build>
-    
+    <name>SieuThiOnline_HeQuanTriCSDL</name>
 </project>

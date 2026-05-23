@@ -345,7 +345,13 @@ public class LoginView extends JFrame {
                 });
             } catch (Exception e) {
                 SwingUtilities.invokeLater(() -> {
-                    JOptionPane.showMessageDialog(this, "Lỗi kết nối DB: " + e.getMessage());
+                    String errorMsg = e.getMessage();
+                    // Phân loại: Nếu là lỗi từ Trigger thì hiện Popup đỏ (Error)
+                    if (errorMsg != null && errorMsg.contains("Loi dang nhap:")) {
+                        JOptionPane.showMessageDialog(this, errorMsg, "Từ chối truy cập", JOptionPane.ERROR_MESSAGE);
+                    } else {
+                        JOptionPane.showMessageDialog(this, "Lỗi kết nối DB: " + errorMsg, "Lỗi hệ thống", JOptionPane.WARNING_MESSAGE);
+                    }
                     btnLogin.setEnabled(true);
                 });
             } finally {
