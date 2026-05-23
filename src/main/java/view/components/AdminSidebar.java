@@ -61,6 +61,20 @@ public class AdminSidebar extends JPanel {
         addMenuItem("Quản lý phân quyền", IconHelper.customer(24));
         addMenuItem("Lịch sử truy cập", IconHelper.history(24));
         addMenuItem("Nhật ký hệ thống", IconHelper.barChart(24));
+
+        /*
+         * ============================================================
+         * MENU DEMO HỆ QUẢN TRỊ CSDL - FUNCTION
+         * ============================================================
+         *
+         * Title hiển thị trên sidebar: "Demo Function"
+         * Action gửi về AdminDashboardView: "Demo Function HQT CSDL"
+         *
+         * Lưu ý:
+         * Action này phải khớp chính xác với case trong AdminDashboardView:
+         * case "Demo Function HQT CSDL":
+         */
+
         addMenuItem("Cài đặt", IconHelper.settings(24));
 
         JScrollPane scrollPane = new JScrollPane(menuPanel);
@@ -158,6 +172,7 @@ public class AdminSidebar extends JPanel {
     }
 
     public interface MenuClickListener {
+
         void onMenuClick(String title);
     }
 
@@ -165,6 +180,7 @@ public class AdminSidebar extends JPanel {
     protected void paintComponent(Graphics g) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
         g2.setColor(APP_BG);
         g2.fillRect(0, 0, getWidth(), getHeight());
 
@@ -172,20 +188,25 @@ public class AdminSidebar extends JPanel {
         int y = 6;
         int w = getWidth() - 13;
         int h = getHeight() - 12;
+
         for (int i = 6; i >= 1; i--) {
             g2.setColor(new Color(23, 52, 99, 3 + i));
             g2.fillRoundRect(x + i, y + i, w - i * 2, h - i * 2, 24, 24);
         }
+
         g2.setColor(SIDEBAR_BG);
         g2.fillRoundRect(x, y, w, h, 24, 24);
+
         g2.setColor(BORDER);
         g2.setStroke(new BasicStroke(1f));
         g2.drawRoundRect(x, y, w - 1, h - 1, 20, 20);
+
         g2.dispose();
         super.paintComponent(g);
     }
 
     private static class CartLogoIcon implements javax.swing.Icon {
+
         private final int size;
 
         CartLogoIcon(int size) {
@@ -206,24 +227,31 @@ public class AdminSidebar extends JPanel {
         public void paintIcon(Component c, Graphics g, int x, int y) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
             g2.setColor(new Color(255, 106, 0, 18));
             g2.fillRoundRect(x + 2, y + 2, size - 4, size - 4, 14, 14);
+
             g2.setColor(ORANGE);
             g2.setStroke(new BasicStroke(2.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+
             int bx = x + 9;
             int by = y + 14;
+
             g2.drawLine(bx, by, bx + 5, by + 20);
             g2.drawLine(bx + 5, by + 20, bx + 26, by + 20);
             g2.drawLine(bx + 9, by + 6, bx + 30, by + 6);
             g2.drawLine(bx + 30, by + 6, bx + 25, by + 19);
             g2.drawLine(bx + 11, by + 10, bx + 24, by + 10);
             g2.drawLine(bx + 13, by + 15, bx + 22, by + 15);
+
             g2.fillOval(bx + 7, by + 25, 5, 5);
             g2.fillOval(bx + 24, by + 25, 5, 5);
+
             g2.setFont(new Font("Segoe UI", Font.BOLD, 9));
             FontMetrics fm = g2.getFontMetrics();
             String mark = "S";
             g2.drawString(mark, bx + 18 - fm.stringWidth(mark) / 2, by + 17);
+
             g2.dispose();
         }
     }
