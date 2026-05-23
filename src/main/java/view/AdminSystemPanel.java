@@ -92,6 +92,7 @@ public class AdminSystemPanel extends JPanel {
 
     private Timer realtimeReloadTimer;
     private volatile boolean reloading = false;
+    private AutoCloseable realtimeSubscription;
 
     private final Color bg = new Color(245, 247, 251);
     private final Color white = Color.WHITE;
@@ -154,7 +155,7 @@ public class AdminSystemPanel extends JPanel {
         realtimeReloadTimer = new Timer(350, e -> reloadAllSafely());
         realtimeReloadTimer.setRepeats(false);
 
-        EventBus.subscribe(AppDataChangedEvent.class, event -> {
+        realtimeSubscription = EventBus.subscribe(AppDataChangedEvent.class, event -> {
             if (event == null || event.getType() == null) {
                 return;
             }
@@ -179,15 +180,13 @@ public class AdminSystemPanel extends JPanel {
             }
 
             /*
- * DEMO FUNCTION:
- *
- * Function OFF:
- * - Không tự reload dashboard khi có realtime event.
- * - Sau khi bán hàng, doanh thu trên dashboard sẽ chưa đổi.
- *
- * Function ON:
- * - Cho phép realtime reload.
- * - Dashboard gọi Oracle Function để lấy doanh thu cuối cùng mới nhất.
+         * Function OFF:
+         * - Không tự reload dashboard khi có realtime event.
+         * - Sau khi bán hàng, doanh thu sẽ chưa tự nhảy.
+         *
+         * Function ON:
+         * - Cho phép realtime reload.
+         * - Dashboard gọi function để lấy doanh thu cuối cùng mới nhất.
              */
             if (!useDbFunctionRevenue) {
                 System.out.println("[AdminSystemPanel] Function OFF: bỏ qua realtime reload - " + event.getMessage());
@@ -274,19 +273,18 @@ public class AdminSystemPanel extends JPanel {
             if (useDbFunctionRevenue) {
                 /*
          * Bật Function:
-         * Reload ngay để lấy doanh thu mới nhất từ Oracle Function.
+         * Reload ngay để lấy dữ liệu mới nhất từ Oracle Function.
                  */
                 reloadAll();
             } else {
                 /*
          * Tắt Function:
          * Không reload ngay.
-         * Giữ snapshot hiện tại để demo trạng thái chưa ứng dụng function/realtime.
+         * Giữ snapshot hiện tại để demo trạng thái chưa tự đồng bộ.
                  */
                 System.out.println("[AdminSystemPanel] Function OFF: giữ snapshot doanh thu hiện tại.");
             }
         });
-
         JButton btnReload = createPrimaryButton("Làm mới", blue);
         btnReload.addActionListener(e -> reloadAll());
 
@@ -299,6 +297,25 @@ public class AdminSystemPanel extends JPanel {
         p.add(actions, BorderLayout.EAST);
 
         return p;
+    }
+
+    @Override
+    public void removeNotify() {
+        super.removeNotify();
+
+        if (realtimeReloadTimer != null) {
+            realtimeReloadTimer.stop();
+        }
+
+        if (realtimeSubscription != null) {
+            try {
+                realtimeSubscription.close();
+                realtimeSubscription = null;
+                System.out.println("[AdminSystemPanel] Đã hủy realtime subscription.");
+            } catch (Exception ex) {
+                System.err.println("[AdminSystemPanel] Không thể hủy realtime subscription: " + ex.getMessage());
+            }
+        }
     }
 
     private void updateFunctionToggleButton() {

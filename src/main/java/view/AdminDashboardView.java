@@ -61,7 +61,14 @@ public class AdminDashboardView extends javax.swing.JFrame {
 
             switch (title) {
                 case "Quản lý chi nhánh":
-                    showPanel(new view.AdminSystemPanel());
+                    /*
+     * Không recreate AdminSystemPanel khi có realtime event.
+     *
+     * Lý do:
+     * - AdminSystemPanel đã tự subscribe EventBus để xử lý realtime.
+     * - Nếu JFrame cũng new AdminSystemPanel liên tục thì listener cũ bị tích lại.
+     * - Đây là nguyên nhân gây lag và làm toggle Function OFF/ON bị reset.
+                     */
                     break;
 
                 case "Quản lý khuyến mãi":
