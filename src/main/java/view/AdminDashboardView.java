@@ -61,14 +61,7 @@ public class AdminDashboardView extends javax.swing.JFrame {
 
             switch (title) {
                 case "Quản lý chi nhánh":
-                    /*
-     * Không recreate AdminSystemPanel khi có realtime event.
-     *
-     * Lý do:
-     * - AdminSystemPanel đã tự subscribe EventBus để xử lý realtime.
-     * - Nếu JFrame cũng new AdminSystemPanel liên tục thì listener cũ bị tích lại.
-     * - Đây là nguyên nhân gây lag và làm toggle Function OFF/ON bị reset.
-                     */
+                    showPanel(new view.AdminSystemPanel());
                     break;
 
                 case "Quản lý khuyến mãi":
@@ -95,22 +88,6 @@ public class AdminDashboardView extends javax.swing.JFrame {
                     showPanel(new AuditLogPanel());
                     break;
 
-                /*
-                 * ============================================================
-                 * DEMO HỆ QUẢN TRỊ CSDL - FUNCTION
-                 * ============================================================
-                 *
-                 * Mục tiêu demo:
-                 * 1. Chưa ứng dụng Function:
-                 *    Java tự tính doanh thu cuối cùng bằng nhiều câu SQL rời rạc.
-                 *
-                 * 2. Đã ứng dụng Function:
-                 *    Java gọi FUNC_GET_FINAL_SYSTEM_REVENUE trong Oracle.
-                 *
-                 * Panel này dùng cho Admin để demo 2 mức:
-                 * - Bug / vấn đề khi logic tính toán nằm ở Java.
-                 * - Cách xử lý khi gom logic vào Oracle Function.
-                 */
                 case "Cài đặt":
                     showPanel(new view.components.UnifiedSettingsPanel());
                     break;
@@ -163,11 +140,10 @@ public class AdminDashboardView extends javax.swing.JFrame {
 
         switch (currentMenu) {
             case "Quản lý chi nhánh":
-                if (type == AppEventType.STORE_INFO
-                        || type == AppEventType.SYSTEM_CONFIG
-                        || type == AppEventType.DASHBOARD) {
-                    showPanel(new view.AdminSystemPanel());
-                }
+                /*
+             * Không recreate AdminSystemPanel khi nhận realtime event.
+             * AdminSystemPanel tự xử lý realtime theo toggle Function ON/OFF.
+                 */
                 break;
 
             case "Quản lý khuyến mãi":
@@ -218,16 +194,6 @@ public class AdminDashboardView extends javax.swing.JFrame {
                         || type == AppEventType.STORE_INFO) {
                     showPanel(new AuditLogPanel());
                 }
-                break;
-
-            /*
-             * Không auto-refresh panel demo Function.
-             * Lý do:
-             * - Đây là màn demo Hệ quản trị CSDL.
-             * - Người demo cần chủ động bấm từng nút:
-             *   Kiểm tra Function / Demo chưa dùng Function / Demo đã dùng Function / So sánh.
-             */
-            case "Demo Function HQT CSDL":
                 break;
 
             case "Cài đặt":
