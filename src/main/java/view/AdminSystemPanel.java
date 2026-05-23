@@ -178,7 +178,23 @@ public class AdminSystemPanel extends JPanel {
                 return;
             }
 
-            System.out.println("[AdminSystemPanel] realtime reload: " + event.getMessage());
+            /*
+ * DEMO FUNCTION:
+ *
+ * Function OFF:
+ * - Không tự reload dashboard khi có realtime event.
+ * - Sau khi bán hàng, doanh thu trên dashboard sẽ chưa đổi.
+ *
+ * Function ON:
+ * - Cho phép realtime reload.
+ * - Dashboard gọi Oracle Function để lấy doanh thu cuối cùng mới nhất.
+             */
+            if (!useDbFunctionRevenue) {
+                System.out.println("[AdminSystemPanel] Function OFF: bỏ qua realtime reload - " + event.getMessage());
+                return;
+            }
+
+            System.out.println("[AdminSystemPanel] Function ON realtime reload: " + event.getMessage());
 
             SwingUtilities.invokeLater(() -> {
                 if (realtimeReloadTimer != null) {
@@ -254,7 +270,21 @@ public class AdminSystemPanel extends JPanel {
         btnToggleRevenueFunction.addActionListener(e -> {
             useDbFunctionRevenue = !useDbFunctionRevenue;
             updateFunctionToggleButton();
-            reloadAll();
+
+            if (useDbFunctionRevenue) {
+                /*
+         * Bật Function:
+         * Reload ngay để lấy doanh thu mới nhất từ Oracle Function.
+                 */
+                reloadAll();
+            } else {
+                /*
+         * Tắt Function:
+         * Không reload ngay.
+         * Giữ snapshot hiện tại để demo trạng thái chưa ứng dụng function/realtime.
+                 */
+                System.out.println("[AdminSystemPanel] Function OFF: giữ snapshot doanh thu hiện tại.");
+            }
         });
 
         JButton btnReload = createPrimaryButton("Làm mới", blue);
@@ -280,13 +310,13 @@ public class AdminSystemPanel extends JPanel {
             btnToggleRevenueFunction.setText("Function: ON");
             btnToggleRevenueFunction.setBackground(green);
             btnToggleRevenueFunction.setToolTipText(
-                    "Đang dùng Oracle Function FUNC_GET_FINAL_SYSTEM_REVENUE để tính doanh thu cuối cùng."
+                    "Function ON: dashboard tự reload realtime và gọi FUNC_GET_FINAL_SYSTEM_REVENUE."
             );
         } else {
             btnToggleRevenueFunction.setText("Function: OFF");
             btnToggleRevenueFunction.setBackground(red);
             btnToggleRevenueFunction.setToolTipText(
-                    "Đang dùng Java SQL rời rạc để tính doanh thu cuối cùng."
+                    "Function OFF: giữ snapshot, không tự reload realtime sau bán hàng."
             );
         }
 
@@ -1275,8 +1305,6 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 650);
     }
 
-
-
     @SuppressWarnings("deprecation")
     private BufferedImage createProductRevenuePie3DChartImage() {
         DefaultPieDataset dataset = new DefaultPieDataset();
@@ -1374,8 +1402,6 @@ public class AdminSystemPanel extends JPanel {
 
         return chart.createBufferedImage(1200, 620);
     }
-
-
 
     private BufferedImage createRevenueOrderDifferenceChartImage() {
         XYSeries currentPeriodSeries = new XYSeries("Kỳ đang lọc");
@@ -1533,8 +1559,6 @@ public class AdminSystemPanel extends JPanel {
         return chart.createBufferedImage(1200, 650);
     }
 
-
-
     private BufferedImage createRevenueOrderLineChartImage() {
         DefaultCategoryDataset revenueDataset = new DefaultCategoryDataset();
         DefaultCategoryDataset orderDataset = new DefaultCategoryDataset();
@@ -1654,8 +1678,6 @@ public class AdminSystemPanel extends JPanel {
 
         return chart.createBufferedImage(1200, 650);
     }
-
-
 
     private BufferedImage createProductBubbleChartImage() {
         XYSeriesCollection dataset = new XYSeriesCollection();
@@ -1793,8 +1815,6 @@ public class AdminSystemPanel extends JPanel {
 
         return chart.createBufferedImage(1200, 650);
     }
-
-
 
     private String safeText(JLabel label) {
         return label == null || label.getText() == null ? "0" : label.getText();
