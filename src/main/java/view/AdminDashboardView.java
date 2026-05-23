@@ -3,26 +3,47 @@ package view;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
 import common.events.EventBus;
-import javax.swing.*;
-import java.awt.*;
+import java.awt.BorderLayout;
+import java.awt.Color;
+import java.awt.Dimension;
+import javax.swing.JFrame;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
+import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import view.components.AdminSidebar;
 
 public class AdminDashboardView extends javax.swing.JFrame {
 
-    private static final java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AdminDashboardView.class.getName());
+    private static final java.util.logging.Logger logger
+            = java.util.logging.Logger.getLogger(AdminDashboardView.class.getName());
 
     private JPanel mainContentPanel;
     private AdminSidebar adminSidebar;
-    private Color bgAdmin = new Color(240, 242, 245);
+    private final Color bgAdmin = new Color(240, 242, 245);
+
+    /*
+     * Sidebar đang hiển thị chữ "Quản lý hệ thống",
+     * nhưng actionTitle gửi về là "Quản lý chi nhánh" trong AdminSidebar.
+     * Vì vậy vẫn giữ currentMenu = "Quản lý chi nhánh".
+     */
     private String currentMenu = "Quản lý chi nhánh";
+
+    /*
+     * Giữ subscription để khi đóng JFrame có thể hủy listener.
+     * Tránh bị tích listener gây lag sau nhiều lần login/logout.
+     */
+    private AutoCloseable dashboardRealtimeSubscription;
 
     public AdminDashboardView() {
         initComponents();
         setupAdminUI();
         setupRealtimeSync();
 
-        // Mở lại màn Quản lý hệ thống như cũ.
-        // Demo Function sẽ nằm bằng toggle trong AdminSystemPanel.
+        /*
+         * Mở màn Quản lý hệ thống mặc định.
+         * Demo Function nằm trong AdminSystemPanel bằng nút Function ON/OFF.
+         */
         currentMenu = "Quản lý chi nhánh";
         showPanel(new view.AdminSystemPanel());
 
@@ -52,15 +73,17 @@ public class AdminDashboardView extends javax.swing.JFrame {
             }
         });
 
-        // Khởi tạo Sidebar Admin
         adminSidebar = new AdminSidebar();
 
-        // NỐI CÁC MỤC MENU VỚI PANEL TƯƠNG ỨNG
         adminSidebar.setMenuClickListener(title -> {
             currentMenu = title;
 
             switch (title) {
                 case "Quản lý chi nhánh":
+                    /*
+                     * Đây là click thủ công từ sidebar.
+                     * Cho phép mở lại AdminSystemPanel.
+                     */
                     showPanel(new view.AdminSystemPanel());
                     break;
 
@@ -107,7 +130,6 @@ public class AdminDashboardView extends javax.swing.JFrame {
             }
         });
 
-        // Thiết lập Layout chính
         this.getContentPane().removeAll();
         this.getContentPane().setLayout(new BorderLayout());
         this.getContentPane().add(adminSidebar, BorderLayout.WEST);
@@ -116,15 +138,13 @@ public class AdminDashboardView extends javax.swing.JFrame {
         mainContentPanel.setBackground(bgAdmin);
         this.getContentPane().add(mainContentPanel, BorderLayout.CENTER);
 
-        // Sau khi add đủ sidebar + content container thì pack lại,
-        // rồi mới set maximize để tránh bị giữ kích thước 400x300 từ initComponents().
         pack();
         setLocationRelativeTo(null);
         setExtendedState(JFrame.MAXIMIZED_BOTH);
     }
 
     private void setupRealtimeSync() {
-        EventBus.subscribe(AppDataChangedEvent.class, e -> {
+        dashboardRealtimeSubscription = EventBus.subscribe(AppDataChangedEvent.class, e -> {
             if (e == null || e.getType() == null) {
                 return;
             }
@@ -141,8 +161,14 @@ public class AdminDashboardView extends javax.swing.JFrame {
         switch (currentMenu) {
             case "Quản lý chi nhánh":
                 /*
-             * Không recreate AdminSystemPanel khi nhận realtime event.
-             * AdminSystemPanel tự xử lý realtime theo toggle Function ON/OFF.
+                 * TUYỆT ĐỐI KHÔNG new AdminSystemPanel tại đây.
+                 *
+                 * Lý do:
+                 * - AdminSystemPanel đã tự xử lý realtime theo nút Function ON/OFF.
+                 * - Nếu AdminDashboardView tạo lại panel mới khi nhận DASHBOARD_CHANGED,
+                 *   constructor của AdminSystemPanel sẽ gọi reloadAll().
+                 * - Khi đó doanh thu sẽ tự nhảy dù Function đang OFF.
+                 * - Đây cũng là nguyên nhân gây lag vì listener cũ bị tích lại.
                  */
                 break;
 
@@ -218,18 +244,11 @@ public class AdminDashboardView extends javax.swing.JFrame {
         JPanel panelToDisplay = panel;
 
         /*
-     * ========================================================
-     * LOGIC MIỄN TRỪ BYPASS
-     * ========================================================
-     *
-     * Bỏ qua UIPermissionGuard cho:
-     * - Tổng quan
-     * - Cài đặt
-     *
-     * Lưu ý:
-     * Demo Function hiện đã được gắn trực tiếp vào AdminSystemPanel
-     * bằng nút toggle Function ON/OFF trong màn "Quản lý hệ thống".
-     * Vì vậy không còn dùng DbmsFunctionDemoPanel riêng nữa.
+         * Bỏ qua UIPermissionGuard cho:
+         * - Tổng quan
+         * - Cài đặt
+         *
+         * AdminSystemPanel vẫn đi qua guard như các panel nghiệp vụ khác.
          */
         boolean isBypassed = (panel instanceof view.components.TongQuanPanel)
                 || (panel instanceof view.components.UnifiedSettingsPanel);
@@ -241,8 +260,8 @@ public class AdminDashboardView extends javax.swing.JFrame {
                 System.err.println("[AdminDashboardView] UIPermissionGuard error: " + ex.getMessage());
 
                 /*
-             * Nếu guard lỗi do thiếu function_id/role trong schema HQT_DEMO,
-             * vẫn cho hiển thị panel để không làm hỏng demo HQT CSDL.
+                 * Nếu guard lỗi do dữ liệu phân quyền chưa đủ,
+                 * vẫn cho hiển thị panel để không chặn demo HQT CSDL.
                  */
                 panelToDisplay = panel;
             }
@@ -261,6 +280,18 @@ public class AdminDashboardView extends javax.swing.JFrame {
         mainContentPanel.repaint();
     }
 
+    private void cleanupRealtimeSubscription() {
+        if (dashboardRealtimeSubscription != null) {
+            try {
+                dashboardRealtimeSubscription.close();
+                dashboardRealtimeSubscription = null;
+                System.out.println("[AdminDashboardView] Đã hủy realtime subscription.");
+            } catch (Exception ex) {
+                System.err.println("[AdminDashboardView] Không thể hủy realtime subscription: " + ex.getMessage());
+            }
+        }
+    }
+
     private void handleLogout() {
         int confirm = JOptionPane.showConfirmDialog(
                 this,
@@ -272,6 +303,8 @@ public class AdminDashboardView extends javax.swing.JFrame {
         if (confirm != JOptionPane.YES_OPTION) {
             return;
         }
+
+        cleanupRealtimeSubscription();
 
         try {
             model.account.Account currentUser
@@ -310,27 +343,34 @@ public class AdminDashboardView extends javax.swing.JFrame {
     @SuppressWarnings("unchecked")
     private void initComponents() {
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+
         javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
         getContentPane().setLayout(layout);
+
         layout.setHorizontalGroup(
                 layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                         .addGap(0, 400, Short.MAX_VALUE)
         );
+
         layout.setVerticalGroup(
                 layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
                         .addGap(0, 300, Short.MAX_VALUE)
         );
+
         pack();
     }
 
     public static void main(String args[]) {
         try {
-            for (javax.swing.UIManager.LookAndFeelInfo info : javax.swing.UIManager.getInstalledLookAndFeels()) {
+            for (javax.swing.UIManager.LookAndFeelInfo info
+                    : javax.swing.UIManager.getInstalledLookAndFeels()) {
+
                 if ("Nimbus".equals(info.getName())) {
                     javax.swing.UIManager.setLookAndFeel(info.getClassName());
                     break;
                 }
             }
+
         } catch (ReflectiveOperationException | javax.swing.UnsupportedLookAndFeelException ex) {
             logger.log(java.util.logging.Level.SEVERE, null, ex);
         }
@@ -349,6 +389,8 @@ public class AdminDashboardView extends javax.swing.JFrame {
         if (confirm != JOptionPane.YES_OPTION) {
             return;
         }
+
+        cleanupRealtimeSubscription();
 
         try {
             model.account.Account currentUser
