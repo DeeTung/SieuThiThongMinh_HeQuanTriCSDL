@@ -94,88 +94,77 @@
         <![CDATA[
             SELECT section_no, section_name, col1, col2, col3, col4, col5
             FROM (
+                /* ============================================================
+                   SECTION 1 - HIEU_QUA_NHAP_BAN_THEO_CHI_NHANH
+                   Schema HQT_DEMO hien khong co ORDERS.STORE_ID va STORES.STORE_NAME.
+                   Vi vay report hien 1 dong tong toan he thong.
+                   ============================================================ */
                 SELECT 1 AS section_no,
                        CAST('HIEU_QUA_NHAP_BAN_THEO_CHI_NHANH' AS VARCHAR2(100)) AS section_name,
-                       CAST(s.store_id AS VARCHAR2(80)) AS col1,
-                       CAST(NVL(TO_CHAR(s.store_name), TO_CHAR(s.address)) AS VARCHAR2(180)) AS col2,
+                       CAST('ALL' AS VARCHAR2(80)) AS col1,
+                       CAST('Toàn hệ thống' AS VARCHAR2(180)) AS col2,
                        CAST(TO_CHAR(NVL(sales.total_revenue, 0), 'FM999G999G999G999') || ' VND' AS VARCHAR2(120)) AS col3,
                        CAST(TO_CHAR(NVL(imports.total_import_cost, 0), 'FM999G999G999G999') || ' VND' AS VARCHAR2(120)) AS col4,
                        CAST(TO_CHAR(NVL(sales.total_revenue, 0) - NVL(imports.total_import_cost, 0), 'FM999G999G999G999') || ' VND' AS VARCHAR2(120)) AS col5,
                        NVL(sales.total_revenue, 0) AS sort_value
-                FROM stores s
-                LEFT JOIN (
-                    SELECT store_id, SUM(total_amount) AS total_revenue
+                FROM (
+                    SELECT NVL(SUM(total_amount), 0) AS total_revenue
                     FROM orders
                     WHERE NVL(is_deleted, 0) = 0
                       AND order_date >= $P{P_FILTER_FROM}
                       AND order_date < $P{P_FILTER_TO}
                       AND (
-                           UPPER(NVL(status, '')) = 'COMPLETED'
-                           OR UPPER(NVL(status, '')) LIKE '%HOÀN THÀNH%'
-                           OR UPPER(NVL(status, '')) LIKE '%HOAN THANH%'
+                            UPPER(NVL(status, '')) = 'COMPLETED'
+                            OR UPPER(NVL(status, '')) = 'SUCCESS'
+                            OR UPPER(NVL(status, '')) = 'PAID'
+                            OR UPPER(NVL(status, '')) LIKE '%HOÀN THÀNH%'
+                            OR UPPER(NVL(status, '')) LIKE '%HOAN THANH%'
+                            OR UPPER(NVL(status, '')) LIKE '%ĐÃ THANH TOÁN%'
+                            OR UPPER(NVL(status, '')) LIKE '%DA THANH TOAN%'
                       )
-                    GROUP BY store_id
-                ) sales ON sales.store_id = s.store_id
-                LEFT JOIN (
-                    SELECT store_id, SUM(total_after_tax) AS total_import_cost
+                ) sales
+                CROSS JOIN (
+                    SELECT NVL(SUM(total_after_tax), 0) AS total_import_cost
                     FROM purchase_receipts
                     WHERE NVL(is_deleted, 0) = 0
                       AND created_at >= $P{P_FILTER_FROM}
                       AND created_at < $P{P_FILTER_TO}
-                    GROUP BY store_id
-                ) imports ON imports.store_id = s.store_id
-                WHERE NVL(s.is_deleted, 0) = 0
+                ) imports
 
                 UNION ALL
 
+                /* ============================================================
+                   SECTION 2 - TON_KHO_THEO_CHI_NHANH
+                   Khong dung STORES.STORE_NAME, chi lay INVENTORY.STORE_ID.
+                   ============================================================ */
                 SELECT 2 AS section_no,
                        CAST('TON_KHO_THEO_CHI_NHANH' AS VARCHAR2(100)) AS section_name,
-                       CAST(s.store_id AS VARCHAR2(80)) AS col1,
-                       CAST(NVL(TO_CHAR(s.store_name), TO_CHAR(s.address)) AS VARCHAR2(180)) AS col2,
+                       CAST(NVL(TO_CHAR(i.store_id), 'NO_STORE') AS VARCHAR2(80)) AS col1,
+                       CAST('Chi nhánh ' || NVL(TO_CHAR(i.store_id), 'NO_STORE') AS VARCHAR2(180)) AS col2,
                        CAST(TO_CHAR(COUNT(DISTINCT i.product_id)) AS VARCHAR2(80)) AS col3,
                        CAST(TO_CHAR(NVL(SUM(NVL(i.quantity, 0)), 0)) AS VARCHAR2(80)) AS col4,
                        CAST(TO_CHAR(SUM(CASE WHEN NVL(i.quantity, 0) <= 20 THEN 1 ELSE 0 END)) AS VARCHAR2(80)) AS col5,
                        NVL(SUM(NVL(i.quantity, 0)), 0) AS sort_value
-                FROM stores s
-                LEFT JOIN inventory i ON i.store_id = s.store_id AND NVL(i.is_deleted, 0) = 0
-                WHERE NVL(s.is_deleted, 0) = 0
-                GROUP BY s.store_id, NVL(TO_CHAR(s.store_name), TO_CHAR(s.address))
+                FROM inventory i
+                WHERE NVL(i.is_deleted, 0) = 0
+                GROUP BY NVL(TO_CHAR(i.store_id), 'NO_STORE')
 
                 UNION ALL
 
+                /* ============================================================
+                   SECTION 3 - NHAN_VIEN_CO_DOANH_THU_CAO_NHAT
+                   Schema HQT_DEMO hien khong dam bao co EMPLOYEES.STORE_ID,
+                   nen de dong ghi chu de report khong bi loi.
+                   ============================================================ */
                 SELECT 3 AS section_no,
                        CAST('NHAN_VIEN_CO_DOANH_THU_CAO_NHAT' AS VARCHAR2(100)) AS section_name,
-                       CAST(store_name AS VARCHAR2(180)) AS col1,
-                       CAST(employee_id AS VARCHAR2(80)) AS col2,
-                       CAST(employee_name AS VARCHAR2(180)) AS col3,
-                       CAST(TO_CHAR(total_orders) AS VARCHAR2(80)) AS col4,
-                       CAST(TO_CHAR(revenue, 'FM999G999G999G999') || ' VND' AS VARCHAR2(100)) AS col5,
-                       revenue AS sort_value
-                FROM (
-                    SELECT NVL(TO_CHAR(s.store_name), e.store_id) AS store_name,
-                           e.employee_id,
-                           TO_CHAR(e.employee_name) AS employee_name,
-                           COUNT(o.order_id) AS total_orders,
-                           NVL(SUM(o.total_amount), 0) AS revenue
-                    FROM employees e
-                    LEFT JOIN stores s ON s.store_id = e.store_id
-                    LEFT JOIN orders o
-                        ON o.employee_id = e.employee_id
-                       AND o.store_id = e.store_id
-                       AND NVL(o.is_deleted, 0) = 0
-                       AND o.order_date >= $P{P_FILTER_FROM}
-                       AND o.order_date < $P{P_FILTER_TO}
-                       AND (
-                            UPPER(NVL(o.status, '')) = 'COMPLETED'
-                            OR UPPER(NVL(o.status, '')) LIKE '%HOÀN THÀNH%'
-                            OR UPPER(NVL(o.status, '')) LIKE '%HOAN THANH%'
-                       )
-                    WHERE NVL(e.is_deleted, 0) = 0
-                      AND e.role_id IN ('R_STAFF_SALE', 'R_STAFF_VIEW_PROD')
-                    GROUP BY NVL(TO_CHAR(s.store_name), e.store_id), e.employee_id, e.employee_name
-                    ORDER BY revenue DESC, total_orders DESC
-                )
-                WHERE ROWNUM <= 10
+                       CAST('ALL' AS VARCHAR2(180)) AS col1,
+                       CAST('-' AS VARCHAR2(80)) AS col2,
+                       CAST('Không áp dụng trong schema HQT_DEMO' AS VARCHAR2(180)) AS col3,
+                       CAST('0' AS VARCHAR2(80)) AS col4,
+                       CAST('0 VND' AS VARCHAR2(100)) AS col5,
+                       0 AS sort_value
+                FROM dual
 
                 UNION ALL SELECT 89, CAST('CHART_FINAL_REVENUE' AS VARCHAR2(100)), '', '', '', '', '', 0 FROM dual
                 UNION ALL SELECT 90, CAST('CHART_PAGE_1' AS VARCHAR2(100)), '', '', '', '', '', 0 FROM dual
