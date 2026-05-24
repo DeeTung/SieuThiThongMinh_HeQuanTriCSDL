@@ -1702,4 +1702,27 @@ public class AccountSql implements SqlInterface<Account> {
             System.err.println("[AccountSql] cleanupDeadSessions error: " + e.getMessage());
         }
     }
+    
+    public boolean touchLoginAttempt(String accountId) {
+        String sql = "UPDATE ACCOUNTS SET LOGIN_ATTEMPT_AT = CURRENT_TIMESTAMP " +
+                     "WHERE ACCOUNT_ID = ? AND NVL(IS_DELETED, 0) = 0";
+        try (Connection con = DatabaseConnection.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, accountId);
+            ps.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            if (e.getMessage() != null && e.getMessage().contains("ORA-20010")) {
+                String msg = e.getMessage();
+                int i = msg.indexOf("Loi dang nhap:");
+                if (i != -1) {
+                    int end = msg.indexOf("\n", i);
+                    msg = msg.substring(i, end == -1 ? msg.length() : end);
+                }
+                throw new RuntimeException(msg);
+            }
+            System.err.println("[AccountSql] touchLoginAttempt error: " + e.getMessage());
+            return false;
+        }
+    }
 }
