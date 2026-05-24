@@ -4,6 +4,7 @@ import business.service.PaymentService;
 import business.service.SessionManager;
 import business.sql.prod_inventory.ProductsSql;
 import business.sql.sales_order.CustomersSql;
+import business.sql.sales_order.OrderFulfillmentSql;
 import business.sql.sales_order.PaymentMethodsSql;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
@@ -1486,7 +1487,10 @@ public class SellPanel extends JPanel {
             @Override
             protected Boolean doInBackground() {
                 try {
-                    return PaymentService.thanhToan(o, dt);
+                    String accountId = SessionManager.getCurrentUser().getAccountId();
+                    OrderFulfillmentSql.getInstance()
+                        .processOrderFulfillment(o, dt, accountId);
+                    return true;
                 } catch (Exception ex) {
                     error = ex;
                     return false;
