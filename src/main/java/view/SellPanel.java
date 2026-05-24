@@ -1,6 +1,7 @@
 package view;
 
 import business.service.PaymentService;
+import business.sql.demo.LostUpdateDemoSql;
 import business.service.SessionManager;
 import business.sql.prod_inventory.ProductsSql;
 import business.sql.sales_order.CustomersSql;
@@ -49,8 +50,24 @@ public class SellPanel extends JPanel {
     private final DecimalFormat moneyFormat = new DecimalFormat("#,##0 đ");
     // Đổi Hint hiển thị đẹp hơn
     private static final String SEARCH_HINT = "🔍 Gõ mã hoặc tên SP vào đây để tìm nè...";
+
+    /*
+     * DEMO HQT CSDL - LOST UPDATE
+     *
+     * true  : nút THANH TOÁN sẽ gọi procedure PROC_DEMO_SELL_PRODUCT_LOST_UPDATE.
+     *         Java không tự kiểm tra/trừ tồn kho để không tự xử lý Lost Update.
+     *
+     * false : nút THANH TOÁN chạy luồng bán hàng thật như cũ bằng PaymentService.thanhToan().
+     *
+     * Khi demo:
+     * - Muốn tạo bug Lost Update: comment dòng SERIALIZABLE trong procedure Oracle.
+     * - Muốn chống Lost Update: mở dòng SERIALIZABLE trong procedure Oracle.
+     */
+    private static final boolean LOST_UPDATE_DEMO_MODE = true;
+    private static final int LOST_UPDATE_DEMO_SLEEP_SECONDS = 8;
     private volatile boolean paymentProcessing = false;
     private volatile boolean paymentJustSucceeded = false;
+    private String lastLostUpdateDemoMessage = "";
 
     // =========================================================
     // UI COMPONENTS
@@ -1403,26 +1420,45 @@ public class SellPanel extends JPanel {
             return;
         }
 
-        try {
-            validateCartAgainstDatabase();
+        if (!LOST_UPDATE_DEMO_MODE) {
+            try {
+                validateCartAgainstDatabase();
 
-            if (!btnPay.isEnabled()) {
+                if (!btnPay.isEnabled()) {
+                    JOptionPane.showMessageDialog(
+                            this,
+                            "Giỏ hàng có sản phẩm không hợp lệ hoặc vượt tồn kho. Vui lòng kiểm tra lại.",
+                            "Không thể thanh toán",
+                            JOptionPane.WARNING_MESSAGE
+                    );
+                    return;
+                }
+            } catch (Exception ex) {
                 JOptionPane.showMessageDialog(
                         this,
-                        "Giỏ hàng có sản phẩm không hợp lệ hoặc vượt tồn kho. Vui lòng kiểm tra lại.",
-                        "Không thể thanh toán",
+                        "Không thể kiểm tra tồn kho trước thanh toán:\n" + ex.getMessage(),
+                        "Lỗi kiểm tra tồn kho",
+                        JOptionPane.ERROR_MESSAGE
+                );
+                return;
+            }
+        } else {
+            /*
+             * DEMO LOST UPDATE:
+             * Không gọi validateCartAgainstDatabase() trước khi thanh toán.
+             * Nếu kiểm tra tồn kho ở Java tại đây thì Java sẽ tự chặn lỗi,
+             * làm mất ý nghĩa demo Lost Update.
+             */
+            if (modCart.getRowCount() != 1) {
+                JOptionPane.showMessageDialog(
+                        this,
+                        "Demo Lost Update chỉ nên để đúng 1 sản phẩm trong giỏ hàng.\n"
+                        + "Vui lòng xóa bớt sản phẩm khác rồi thử lại.",
+                        "Demo Lost Update",
                         JOptionPane.WARNING_MESSAGE
                 );
                 return;
             }
-        } catch (Exception ex) {
-            JOptionPane.showMessageDialog(
-                    this,
-                    "Không thể kiểm tra tồn kho trước thanh toán:\n" + ex.getMessage(),
-                    "Lỗi kiểm tra tồn kho",
-                    JOptionPane.ERROR_MESSAGE
-            );
-            return;
         }
 
         paymentProcessing = true;
@@ -1486,6 +1522,10 @@ public class SellPanel extends JPanel {
             @Override
             protected Boolean doInBackground() {
                 try {
+                    if (LOST_UPDATE_DEMO_MODE) {
+                        return processLostUpdateDemoCheckout(o, dt);
+                    }
+
                     return PaymentService.thanhToan(o, dt);
                 } catch (Exception ex) {
                     error = ex;
@@ -1500,15 +1540,22 @@ public class SellPanel extends JPanel {
 
                     if (success) {
                         paymentJustSucceeded = true;
-                        handlePaymentSuccess(o.getOrderId());
+
+                        if (LOST_UPDATE_DEMO_MODE) {
+                            handleLostUpdateDemoSuccess();
+                        } else {
+                            handlePaymentSuccess(o.getOrderId());
+                        }
                     } else {
                         if (error != null) {
                             handleGeneralError(error);
                         } else {
                             JOptionPane.showMessageDialog(
                                     SellPanel.this,
-                                    "Thanh toán thất bại. Có thể tồn kho đã thay đổi, vui lòng làm mới giỏ hàng.",
-                                    "Thanh toán thất bại",
+                                    LOST_UPDATE_DEMO_MODE
+                                            ? "Demo Lost Update thất bại:\n" + lastLostUpdateDemoMessage
+                                            : "Thanh toán thất bại. Có thể tồn kho đã thay đổi, vui lòng làm mới giỏ hàng.",
+                                    LOST_UPDATE_DEMO_MODE ? "Demo Lost Update" : "Thanh toán thất bại",
                                     JOptionPane.WARNING_MESSAGE
                             );
                         }
@@ -1530,6 +1577,65 @@ public class SellPanel extends JPanel {
                 }
             }
         }.execute();
+    }
+
+    private boolean processLostUpdateDemoCheckout(Order order, List<OrderDetail> details) throws Exception {
+        if (order == null) {
+            throw new IllegalArgumentException("Hóa đơn demo không hợp lệ.");
+        }
+
+        if (details == null || details.isEmpty()) {
+            throw new IllegalArgumentException("Giỏ hàng demo đang rỗng.");
+        }
+
+        /*
+         * Demo Lost Update chỉ xử lý 1 sản phẩm/lần để dễ quan sát:
+         * - 2 nhân viên cùng bán cùng 1 product_id.
+         * - Procedure Oracle quyết định bug/fix bằng dòng SERIALIZABLE.
+         */
+        OrderDetail detail = details.get(0);
+
+        String employeeId = order.getEmployeeId();
+        String storeId = order.getStoreId();
+        String productId = detail.getProductId();
+        int sellQty = detail.getQuantity();
+
+        LostUpdateDemoSql.LostUpdateResult result
+                = LostUpdateDemoSql.getInstance().sellProductByProcedure(
+                        employeeId,
+                        storeId,
+                        productId,
+                        sellQty,
+                        LOST_UPDATE_DEMO_SLEEP_SECONDS
+                );
+
+        lastLostUpdateDemoMessage = result.toString();
+
+        System.out.println("[SellPanel][LostUpdateDemo] "
+                + "employeeId=" + employeeId
+                + ", storeId=" + storeId
+                + ", productId=" + productId
+                + ", sellQty=" + sellQty
+                + ", result=" + result);
+
+        return result.isSuccess();
+    }
+
+    private void handleLostUpdateDemoSuccess() {
+        /*
+         * Procedure demo chỉ cập nhật tồn kho/log, không tạo hóa đơn thật.
+         * Vì vậy không mở report hóa đơn ở đây.
+         */
+        clearCart();
+        resetCustomerAfterPayment();
+        loadProducts();
+
+        JOptionPane.showMessageDialog(
+                this,
+                "✅ Demo Lost Update chạy xong!\n" + lastLostUpdateDemoMessage,
+                "Demo Lost Update",
+                JOptionPane.INFORMATION_MESSAGE
+        );
     }
 
     private void handlePaymentSuccess(String orderId) {
