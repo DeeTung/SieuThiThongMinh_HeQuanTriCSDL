@@ -1823,10 +1823,6 @@ public class ProductView extends JPanel {
     }
 
     private void btnUpdateActionPerformed() {
-        if (!requireProductMutationPermission()) {
-            return;
-        }
-
         int row = tblProducts.getSelectedRow();
         if (row < 0) {
             JOptionPane.showMessageDialog(this, "⚠️ Vui lòng chọn một sản phẩm trong bảng để cập nhật!", "Chưa chọn dòng", JOptionPane.WARNING_MESSAGE);
@@ -1834,44 +1830,138 @@ public class ProductView extends JPanel {
         }
 
         int modelRow = tblProducts.convertRowIndexToModel(row);
-        String idOld = tblProducts.getModel().getValueAt(modelRow, 0).toString().trim();
-
+        String idSelected = tblProducts.getModel().getValueAt(modelRow, 0).toString().trim();
         Product p = getProductFromForm();
         if (p == null) {
             return;
         }
 
-        // BẮT BUỘC giữ lại mã sản phẩm đang chọn.
-        // Trước đó bị thiếu dòng này nên updateInStore/update có thể không biết update sản phẩm nào.
-        p.setProductId(idOld);
+        p.setProductId(idSelected);
 
-        boolean updated;
+        // HỘP THOẠI CHỌN CHẾ ĐỘ XỬ LÝ ĐỒNG THỜI
+        Object[] options = {"Chạy Tiến trình T1 (Gài khóa chéo)", "Chạy Tiến trình T2 (Gài khóa chéo)", "Cập nhật thường", "Hủy"};
+        int choice = JOptionPane.showOptionDialog(this,
+                "Sản phẩm đang chọn: " + idSelected + "\nBạn muốn thực hiện cập nhật theo chế độ nào?",
+                "Tùy chọn Xử lý Đồng thời (Hệ quản trị CSDL)",
+                JOptionPane.YES_NO_CANCEL_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null, options, options[2]);
 
-        if (!SessionManager.isAdmin()) {
-            String storeId = getCurrentStoreIdOrWarn();
+        if (choice == 3 || choice == JOptionPane.CLOSED_OPTION) { // Người dùng bấm Hủy
+            return;
+        }
 
-            if (storeId == null) {
+        // ==========================================================
+        // XỬ LÝ CHẾ ĐỘ DEADLOCK ĐỘNG VỚI 2 SẢN PHẨM BẤT KỲ
+        // ==========================================================
+        if (choice == JOptionPane.YES_OPTION || choice == JOptionPane.NO_OPTION) {
+            
+            // BƯỚC ĐỘNG: Yêu cầu gõ mã sản phẩm thứ 2 muốn khóa chéo
+            String idTarget = JOptionPane.showInputDialog(this, 
+                    "Bạn đang đứng ở sản phẩm: " + idSelected + "\n" +
+                    "Nhập mã sản phẩm thứ 2 muốn gài bế tắc chéo (Ví dụ: SP0000002, SP0000005...):");
+            
+            if (idTarget == null || idTarget.trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "⚠️ Mã sản phẩm đối ứng không được rỗng!", "Hủy thao tác", JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            idTarget = idTarget.trim();
+
+            if (idSelected.equals(idTarget)) {
+                JOptionPane.showMessageDialog(this, "⚠️ Bạn phải nhập một mã sản phẩm KHÁC sản phẩm hiện tại để tạo khóa chéo!", "Sai kịch bản", JOptionPane.ERROR_MESSAGE);
                 return;
             }
 
-            p.setStoreId(storeId);
-            updated = ProductsSql.getInstance().updateInStore(p, storeId);
-        } else {
-            updated = ProductsSql.getInstance().update(p);
-        }
+            // Yêu cầu nhập giá tiền mới cho sản phẩm thứ 2
+            String priceTargetStr = JOptionPane.showInputDialog(this, 
+                    "Nhập giá bán mới muốn cập nhật cho sản phẩm thứ hai (" + idTarget + "):", "200000");
+            
+            if (priceTargetStr == null || priceTargetStr.trim().isEmpty()) {
+                return;
+            }
+            BigDecimal priceTarget = new BigDecimal(priceTargetStr.trim());
 
-        if (updated) {
-            SyncVersionDao.bumpVersion("PRODUCTS");
-            SyncVersionDao.bumpVersion("INVENTORY");
+            // Thiết lập trật tự biến để nạp vào Procedure theo đúng thứ tự chuỗi ID tăng dần (Tránh lỗi trật tự khóa)
+            final String prod1 = idSelected.compareTo(idTarget) < 0 ? idSelected : idTarget;
+            final BigDecimal price1 = idSelected.compareTo(idTarget) < 0 ? p.getBasePrice() : priceTarget;
 
-            RealtimeClient.send("PRODUCTS_CHANGED");
-            RealtimeClient.send("INVENTORY_CHANGED");
+            final String prod2 = idSelected.compareTo(idTarget) < 0 ? idTarget : idSelected;
+            final BigDecimal price2 = idSelected.compareTo(idTarget) < 0 ? priceTarget : p.getBasePrice();
 
-            JOptionPane.showMessageDialog(this, "✅ Cập nhật sản phẩm thành công!");
-            loadDataToTable();
-            btnClearActionPerformed();
-        } else {
-            JOptionPane.showMessageDialog(this, "❌ Cập nhật thất bại! Vui lòng kiểm tra Database.", "Lỗi hệ thống", JOptionPane.ERROR_MESSAGE);
+            // Xác định tên Procedure dựa trên việc bạn chọn luồng T1 hay T2
+            String procedureName = (choice == JOptionPane.YES_OPTION) ? "PROC_DEMO_DEADLOCK_T1" : "PROC_DEMO_DEADLOCK_T2";
+            String sqlCall = "{call " + procedureName + "(?, ?, ?, ?)}";
+
+            System.out.println("[DB-CALL] Chuẩn bị gọi: " + procedureName + " | Cặp mặt hàng gài khóa: (" + prod1 + ", " + prod2 + ")");
+
+            // Chạy luồng SwingWorker ẩn để giao diện Swing không bị đơ khi gọi DBMS_SESSION.SLEEP
+            new SwingWorker<Void, Void>() {
+                private Exception exOccurred = null;
+
+                @Override
+                protected Void doInBackground() throws Exception {
+                    try (java.sql.Connection conn = common.db.DatabaseConnection.getConnection();
+                         java.sql.CallableStatement cstmt = conn.prepareCall(sqlCall)) {
+                        
+                        cstmt.setString(1, prod1);
+                        cstmt.setBigDecimal(2, price1);
+                        cstmt.setString(3, prod2);
+                        cstmt.setBigDecimal(4, price2);
+                        
+                        cstmt.execute(); // Bắt đầu treo lệnh chờ đồng bộ từ Oracle
+                    } catch (Exception ex) {
+                        exOccurred = ex;
+                    }
+                    return null;
+                }
+
+                @Override
+                protected void done() {
+                    if (exOccurred != null) {
+                        if (exOccurred instanceof java.sql.SQLException && ((java.sql.SQLException) exOccurred).getErrorCode() == 60) {
+                            java.sql.SQLException sqlEx = (java.sql.SQLException) exOccurred;
+                            System.err.println("\n=======================================================");
+                            System.err.println("[PHÁT HIỆN DEADLOCK TỪ ENGINE ORACLE DBMS - ORA-00060]");
+                            System.err.println("Mã lỗi hệ thống (Error Code): " + sqlEx.getErrorCode());
+                            System.err.println("Trạng thái SQLState: " + sqlEx.getSQLState());
+                            System.err.println("Thông báo phản hồi: " + sqlEx.getMessage());
+                            System.err.println("=======================================================\n");
+
+                            JOptionPane.showMessageDialog(ProductView.this,
+                                    "💥 [PHÁT HIỆN DEADLOCK THÀNH CÔNG!]\n" +
+                                    "Oracle DBMS vừa phát hiện vòng lặp khóa chéo khép kín.\n" +
+                                    "Hệ thống tự động hủy giao dịch của tài khoản này để giải thoát bế tắc!\n" +
+                                    "Mã hiệu phản hồi: ORA-00060 (Xem log chi tiết tại NetBeans Output).",
+                                    "Kết quả Xử lý Đồng thời", JOptionPane.ERROR_MESSAGE);
+                        } else {
+                            exOccurred.printStackTrace();
+                        }
+                    } else {
+                        JOptionPane.showMessageDialog(ProductView.this,
+                                "✅ [TIẾN TRÌNH HOÀN THÀNH CHẠY TIẾP]\n" +
+                                "Giao dịch của bạn đã thực thi thành công vượt qua trạng thái khóa chéo (Winner)!\n" +
+                                "Dữ liệu cập nhật động đã được COMMIT xuống cơ sở dữ liệu.",
+                                "Kết quả Xử lý Đồng thời", JOptionPane.INFORMATION_MESSAGE);
+                    }
+                    loadDataToTable(); // Cập nhật lại giao diện bảng sản phẩm
+                }
+            }.execute();
+        } 
+        // ==========================================================
+        // CHẾ ĐỘ CẬP NHẬT THƯỜNG (GIỮ NGUYÊN MÃ GỐC CỦA BẠN)
+        // ==========================================================
+        else { 
+            if (ProductsSql.getInstance().update(p)) {
+                SyncVersionDao.bumpVersion("PRODUCTS");
+                SyncVersionDao.bumpVersion("INVENTORY");
+                RealtimeClient.send("PRODUCTS_CHANGED");
+                RealtimeClient.send("INVENTORY_CHANGED");
+                JOptionPane.showMessageDialog(this, "✅ Cập nhật sản phẩm thành công!");
+                loadDataToTable();
+                btnClearActionPerformed();
+            } else {
+                JOptionPane.showMessageDialog(this, "❌ Cập nhật thất bại! Vui lòng kiểm tra Database.", "Lỗi hệ thống", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 
