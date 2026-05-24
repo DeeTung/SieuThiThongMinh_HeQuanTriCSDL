@@ -79,6 +79,11 @@ public class LoginService {
             return null;
         }
         
+        // Trigger TRG_VALIDATE_LOGIN_TIME bắn tại đây để kiểm tra ca làm việc
+        // Nếu ngoài ca -> RuntimeException nổi lên, authenticate() trả về null
+        AccountSql.getInstance().touchLoginAttempt(acc.getAccountId());
+
+        // Qua được trigger mới set online
         business.sql.rbac.AccountSql.getInstance().setOnline(acc.getAccountId());
         
         String tokenValue = UUID.randomUUID().toString();
