@@ -54,6 +54,7 @@ CREATE TABLE ACCOUNTS (
     online_status      VARCHAR2(20),
     last_login_at      TIMESTAMP,
     last_logout_at     TIMESTAMP,
+    LOGIN_ATTEMPT_AT   TIMESTAMP,
     created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     is_deleted         NUMBER(1) DEFAULT 0,
@@ -238,7 +239,7 @@ CREATE TABLE ATTENDANCE (
     check_out_time         TIMESTAMP,
     attendance_coefficient NUMBER(3, 1),
     is_deleted             NUMBER(1) DEFAULT 0,
-    PRIMARY KEY (employee_id, shift_id),
+    PRIMARY KEY (employee_id, shift_id, work_date),
     CONSTRAINT FK_ATTENDANCE_EMPLOYEES FOREIGN KEY (employee_id) REFERENCES EMPLOYEES (employee_id),
     CONSTRAINT FK_ATTENDANCE_SHIFTS FOREIGN KEY (shift_id) REFERENCES SHIFTS (shift_id)
 );
