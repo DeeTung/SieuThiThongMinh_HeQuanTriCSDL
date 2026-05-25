@@ -208,10 +208,7 @@ public class PaymentService {
             """;
 
             try (
-                    PreparedStatement psCheckStock = con.prepareStatement(checkStockSql);
-                    PreparedStatement psUpdateStock = con.prepareStatement(updateStockSql);
-                    PreparedStatement psDetail = con.prepareStatement(insertDetailSql)
-            ) {
+                    PreparedStatement psCheckStock = con.prepareStatement(checkStockSql); PreparedStatement psUpdateStock = con.prepareStatement(updateStockSql); PreparedStatement psDetail = con.prepareStatement(insertDetailSql)) {
                 for (OrderDetail d : details) {
                     normalizeOrderDetailBeforeInsert(d, order.getOrderId());
 
@@ -403,9 +400,7 @@ public class PaymentService {
         """;
 
         try (
-                PreparedStatement psDetail = con.prepareStatement(insertDetailSql);
-                PreparedStatement psStock = con.prepareStatement(updateStockSql)
-        ) {
+                PreparedStatement psDetail = con.prepareStatement(insertDetailSql); PreparedStatement psStock = con.prepareStatement(updateStockSql)) {
             for (OrderDetail ct : details) {
                 normalizeOrderDetailBeforeInsert(ct, order.getOrderId());
 

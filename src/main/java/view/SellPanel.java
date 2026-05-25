@@ -1449,11 +1449,10 @@ public class SellPanel extends JPanel {
              * Nếu kiểm tra tồn kho ở Java tại đây thì Java sẽ tự chặn lỗi,
              * làm mất ý nghĩa demo Lost Update.
              */
-            if (modCart.getRowCount() != 1) {
+            if (modCart.getRowCount() <= 0) {
                 JOptionPane.showMessageDialog(
                         this,
-                        "Demo Lost Update chỉ nên để đúng 1 sản phẩm trong giỏ hàng.\n"
-                        + "Vui lòng xóa bớt sản phẩm khác rồi thử lại.",
+                        "Giỏ hàng demo đang rỗng.",
                         "Demo Lost Update",
                         JOptionPane.WARNING_MESSAGE
                 );
@@ -1562,6 +1561,28 @@ public class SellPanel extends JPanel {
 
                         loadProducts();
                         validateCartAgainstDatabase();
+
+                        /*
+                         * Demo Lost Update thất bại cũng cần bắn sự kiện để các màn hình
+                         * quản trị/tồn kho reload lại dữ liệu mới nhất.
+                         *
+                         * Lưu ý: procedure demo Lost Update chỉ cập nhật INVENTORY/log,
+                         * không tạo hóa đơn thật trong ORDERS nên doanh thu không tăng.
+                         */
+                        EventBus.publish(new AppDataChangedEvent(
+                                AppEventType.INVENTORY,
+                                "LOST_UPDATE_DEMO_FAILED_INVENTORY_RELOAD"
+                        ));
+
+                        EventBus.publish(new AppDataChangedEvent(
+                                AppEventType.DASHBOARD,
+                                "LOST_UPDATE_DEMO_FAILED_DASHBOARD_RELOAD"
+                        ));
+
+                        EventBus.publish(new AppDataChangedEvent(
+                                AppEventType.STATISTICS,
+                                "LOST_UPDATE_DEMO_FAILED_STATISTICS_RELOAD"
+                        ));
                     }
 
                 } catch (Exception ex) {
@@ -1588,51 +1609,131 @@ public class SellPanel extends JPanel {
             throw new IllegalArgumentException("Giỏ hàng demo đang rỗng.");
         }
 
-        /*
-         * Demo Lost Update chỉ xử lý 1 sản phẩm/lần để dễ quan sát:
-         * - 2 nhân viên cùng bán cùng 1 product_id.
-         * - Procedure Oracle quyết định bug/fix bằng dòng SERIALIZABLE.
-         */
-        OrderDetail detail = details.get(0);
-
         String employeeId = order.getEmployeeId();
         String storeId = order.getStoreId();
-        String productId = detail.getProductId();
-        int sellQty = detail.getQuantity();
 
-        LostUpdateDemoSql.LostUpdateResult result
-                = LostUpdateDemoSql.getInstance().sellProductByProcedure(
-                        employeeId,
-                        storeId,
-                        productId,
-                        sellQty,
-                        LOST_UPDATE_DEMO_SLEEP_SECONDS
-                );
+        StringBuilder successMessages = new StringBuilder();
+        StringBuilder failedMessages = new StringBuilder();
 
-        lastLostUpdateDemoMessage = result.toString();
+        int successCount = 0;
+        int failedCount = 0;
 
-        System.out.println("[SellPanel][LostUpdateDemo] "
-                + "employeeId=" + employeeId
-                + ", storeId=" + storeId
-                + ", productId=" + productId
-                + ", sellQty=" + sellQty
-                + ", result=" + result);
+        for (OrderDetail detail : details) {
+            if (detail == null) {
+                continue;
+            }
 
-        return result.isSuccess();
+            String productId = detail.getProductId();
+            int sellQty = detail.getQuantity();
+
+            if (productId == null || productId.trim().isEmpty() || sellQty <= 0) {
+                failedCount++;
+                failedMessages
+                        .append("- Sản phẩm không hợp lệ hoặc số lượng <= 0\n");
+                continue;
+            }
+
+            LostUpdateDemoSql.LostUpdateResult result
+                    = LostUpdateDemoSql.getInstance().sellProductByProcedure(
+                            employeeId,
+                            storeId,
+                            productId,
+                            sellQty,
+                            LOST_UPDATE_DEMO_SLEEP_SECONDS
+                    );
+
+            System.out.println("[SellPanel][LostUpdateDemo] "
+                    + "employeeId=" + employeeId
+                    + ", storeId=" + storeId
+                    + ", productId=" + productId
+                    + ", sellQty=" + sellQty
+                    + ", result=" + result);
+
+            if (result.isSuccess()) {
+                successCount++;
+                successMessages
+                        .append("- ")
+                        .append(productId)
+                        .append(" | SL bán: ")
+                        .append(sellQty)
+                        .append(" | ")
+                        .append(result.getMessage())
+                        .append("\n");
+            } else {
+                failedCount++;
+                failedMessages
+                        .append("- ")
+                        .append(productId)
+                        .append(" | SL bán: ")
+                        .append(sellQty)
+                        .append(" | ")
+                        .append(result)
+                        .append("\n");
+            }
+        }
+
+        StringBuilder finalMessage = new StringBuilder();
+
+        finalMessage
+                .append("Tổng dòng xử lý: ")
+                .append(details.size())
+                .append("\n")
+                .append("Thành công: ")
+                .append(successCount)
+                .append("\n")
+                .append("Thất bại: ")
+                .append(failedCount)
+                .append("\n\n");
+
+        if (successMessages.length() > 0) {
+            finalMessage
+                    .append("Các dòng thành công:\n")
+                    .append(successMessages)
+                    .append("\n");
+        }
+
+        if (failedMessages.length() > 0) {
+            finalMessage
+                    .append("Các dòng thất bại:\n")
+                    .append(failedMessages);
+        }
+
+        lastLostUpdateDemoMessage = finalMessage.toString();
+
+        /*
+     * Nếu có ít nhất 1 dòng thất bại thì xem như demo thất bại
+     * để giao diện hiển thị cảnh báo ORA-08177 hoặc lỗi tương ứng.
+         */
+        return failedCount == 0 && successCount > 0;
     }
 
     private void handleLostUpdateDemoSuccess() {
         /*
-         * Procedure demo chỉ cập nhật tồn kho/log, không tạo hóa đơn thật.
-         * Vì vậy không mở report hóa đơn ở đây.
+     * Procedure demo chỉ cập nhật tồn kho/log, không tạo hóa đơn thật.
+     * Vì vậy không mở report hóa đơn ở đây.
          */
         clearCart();
         resetCustomerAfterPayment();
         loadProducts();
 
+        EventBus.publish(new AppDataChangedEvent(
+                AppEventType.INVENTORY,
+                "LOST_UPDATE_DEMO_INVENTORY_CHANGED"
+        ));
+
+        EventBus.publish(new AppDataChangedEvent(
+                AppEventType.STATISTICS,
+                "LOST_UPDATE_DEMO_STATISTICS_CHANGED"
+        ));
+
+        EventBus.publish(new AppDataChangedEvent(
+                AppEventType.DASHBOARD,
+                "LOST_UPDATE_DEMO_DASHBOARD_CHANGED"
+        ));
+
         JOptionPane.showMessageDialog(
                 this,
-                "✅ Demo Lost Update chạy xong!\n" + lastLostUpdateDemoMessage,
+                "✅ Demo Lost Update chạy xong!\n\n" + lastLostUpdateDemoMessage,
                 "Demo Lost Update",
                 JOptionPane.INFORMATION_MESSAGE
         );

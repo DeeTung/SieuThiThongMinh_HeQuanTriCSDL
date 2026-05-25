@@ -139,17 +139,37 @@ public class AdminSystemPanel extends JPanel {
     private boolean useDbFunctionRevenue = false;
     private JButton btnToggleRevenueFunction;
 
-    /*
-     * Dùng để khóa snapshot doanh thu sau khi load lần đầu.
-     *
-     * Function OFF:
-     * - Load lần đầu vẫn lấy dữ liệu hiện tại để màn hình có số liệu.
-     * - Sau đó nếu có realtime hoặc reload nội bộ thì KHÔNG query lại doanh thu.
-     *
-     * Function ON:
-     * - Cho phép reload doanh thu, gọi Oracle Function.
+    /**
+     * Đánh dấu panel đã load dữ liệu lần đầu.
      */
     private boolean initialLoadDone = false;
+
+    /**
+     * ============================================================ SNAPSHOT
+     * DOANH THU KHI FUNCTION OFF
+     * ============================================================
+     *
+     * Mục tiêu demo: - Function OFF: doanh thu/lãi gộp/tổng đơn KHÔNG tự nhảy
+     * sau khi Staff thanh toán. - Kể cả bấm Làm mới, đổi tab hoặc panel bị tạo
+     * lại trong cùng phiên app, dashboard vẫn giữ snapshot cũ. - Function ON:
+     * cho phép gọi SQL/Oracle Function để cập nhật số liệu mới nhất.
+     *
+     * Lưu ý: - Đây là snapshot ở tầng UI để phục vụ demo Function ON/OFF. - Dữ
+     * liệu thật trong ORDERS vẫn đã được insert khi thanh toán thật.
+     */
+    private static RevenueSnapshot frozenRevenueSnapshot;
+
+    private static class RevenueSnapshot {
+
+        String todayRevenue;
+        String monthRevenue;
+        String orderTotal;
+        String monthImportCost;
+        String grossProfit;
+        String grossProfitMargin;
+        Object[][] overviewRevenueRows;
+        Object[][] reportRevenueRows;
+    }
 
     public AdminSystemPanel() {
         setLayout(new BorderLayout());
@@ -161,10 +181,7 @@ public class AdminSystemPanel extends JPanel {
         initUI();
         initRealtime();
 
-        /*
-         * Load lần đầu để có dữ liệu ban đầu.
-         * Sau lần này, nếu Function OFF thì các reload tự động sẽ bị khóa snapshot doanh thu.
-         */
+        // Load dữ liệu lần đầu để dashboard có snapshot ban đầu.
         reloadAll(true);
         initialLoadDone = true;
     }
@@ -290,21 +307,29 @@ public class AdminSystemPanel extends JPanel {
 
             if (useDbFunctionRevenue) {
                 /*
-         * Bật Function:
-         * Reload ngay để lấy dữ liệu mới nhất từ Oracle Function.
+                 * Bật Function:
+                 * Cho phép dashboard cập nhật số liệu mới nhất từ DB/Oracle Function.
                  */
                 reloadAll(true);
             } else {
                 /*
-         * Tắt Function:
-         * Không reload ngay.
-         * Giữ snapshot hiện tại để demo trạng thái chưa tự đồng bộ.
+                 * Tắt Function:
+                 * Chụp snapshot ngay tại thời điểm tắt và giữ nguyên.
+                 * Sau đó Staff thanh toán thì doanh thu trên dashboard không tự nhảy nữa.
                  */
-                System.out.println("[AdminSystemPanel] Function OFF: giữ snapshot doanh thu hiện tại.");
+                captureRevenueSnapshot();
+                System.out.println("[AdminSystemPanel] Function OFF: đã chụp snapshot doanh thu hiện tại.");
             }
         });
         JButton btnReload = createPrimaryButton("Làm mới", blue);
-        btnReload.addActionListener(e -> reloadAll(true));
+        btnReload.addActionListener(e -> {
+            /*
+             * Function OFF: Làm mới chỉ cập nhật các bảng phụ như tồn kho,
+             * không cập nhật doanh thu/tổng đơn/lãi gộp.
+             * Function ON: Làm mới cập nhật toàn bộ và gọi Function.
+             */
+            reloadAll(useDbFunctionRevenue);
+        });
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         actions.setOpaque(false);
@@ -532,7 +557,7 @@ public class AdminSystemPanel extends JPanel {
             resetFilterToCurrentMonth();
             syncSpinnerWithCurrentFilter();
             updateFilterInfoLabel();
-            reloadAll(true);
+            reloadAll(useDbFunctionRevenue);
         });
 
         left.add(lblFrom);
@@ -608,7 +633,7 @@ public class AdminSystemPanel extends JPanel {
                 + fmt.format(Date.from(filterTo.atZone(ZoneId.systemDefault()).toInstant()));
 
         updateFilterInfoLabel();
-        reloadAll(true);
+        reloadAll(useDbFunctionRevenue);
     }
 
     private void updateFilterInfoLabel() {
@@ -857,49 +882,127 @@ public class AdminSystemPanel extends JPanel {
         reloadAll(false);
     }
 
+    /**
+     * Reload dashboard.
+     *
+     * Quy tắc demo Function: - Function OFF: giữ snapshot doanh thu/tổng
+     * đơn/lãi gộp. Sau khi Staff thanh toán, doanh thu thật trong DB có tăng
+     * nhưng màn Admin không tự nhảy. - Function ON: cho phép reload doanh thu
+     * và gọi Oracle Function. - forceRevenueRefresh chỉ có tác dụng khi
+     * Function ON hoặc khi chưa có snapshot lần đầu.
+     */
     private void reloadAll(boolean forceRevenueRefresh) {
-        /*
-         * ============================================================
-         * QUAN TRỌNG CHO DEMO FUNCTION
-         * ============================================================
-         *
-         * Function OFF:
-         * - Sau lần load đầu tiên, khóa snapshot doanh thu.
-         * - Khi thanh toán đơn hàng, realtime có gọi reloadAll(false)
-         *   thì doanh thu KHÔNG tự cộng.
-         *
-         * Function ON:
-         * - Cho phép reload doanh thu.
-         * - Lãi gộp/doanh thu cuối cùng sẽ lấy từ Oracle Function.
-         *
-         * forceRevenueRefresh = true:
-         * - Dùng cho load lần đầu.
-         * - Dùng khi bấm Làm mới.
-         * - Dùng khi đổi bộ lọc ngày.
-         * - Dùng khi bật Function ON.
-         */
-        boolean lockRevenueSnapshot = initialLoadDone
-                && !useDbFunctionRevenue
-                && !forceRevenueRefresh;
+        boolean shouldFreezeRevenue = !useDbFunctionRevenue && frozenRevenueSnapshot != null;
 
-        if (lockRevenueSnapshot) {
-            System.out.println("[AdminSystemPanel] Function OFF: khóa snapshot doanh thu, bỏ qua reload doanh thu.");
+        if (shouldFreezeRevenue) {
+            applyRevenueSnapshot();
+            System.out.println("[AdminSystemPanel] Function OFF: dùng snapshot, không reload doanh thu/tổng đơn/lãi gộp.");
         } else {
             reloadCards();
 
             reloadImportSalesEfficiencyCards();
             reloadImportSalesEfficiencyByStore(tblOverviewRevenueByStore);
             reloadImportSalesEfficiencyByStore(tblReportRevenueByStore);
+
+            if (!useDbFunctionRevenue && frozenRevenueSnapshot == null) {
+                captureRevenueSnapshot();
+                System.out.println("[AdminSystemPanel] Function OFF: tạo snapshot doanh thu lần đầu.");
+            }
         }
 
         /*
-         * Các bảng không phải doanh thu vẫn cập nhật được.
-         * Nếu muốn khóa toàn bộ màn hình khi Function OFF, đưa các dòng này vào block else bên trên.
+         * Các dữ liệu không phải doanh thu vẫn được cập nhật để UI không bị cũ hoàn toàn.
+         * Ví dụ: tồn kho, cảnh báo tồn thấp.
          */
         reloadInventoryByStore(tblOverviewInventoryByStore);
         reloadInventoryByStore(tblReportInventoryByStore);
         reloadTopEmployee();
         reloadLowStock();
+    }
+
+    private void captureRevenueSnapshot() {
+        if (lblTodayRevenue == null || lblMonthRevenue == null || lblOrderTotal == null
+                || lblMonthImportCost == null || lblGrossProfit == null || lblGrossProfitMargin == null) {
+            return;
+        }
+
+        RevenueSnapshot snapshot = new RevenueSnapshot();
+        snapshot.todayRevenue = lblTodayRevenue.getText();
+        snapshot.monthRevenue = lblMonthRevenue.getText();
+        snapshot.orderTotal = lblOrderTotal.getText();
+        snapshot.monthImportCost = lblMonthImportCost.getText();
+        snapshot.grossProfit = lblGrossProfit.getText();
+        snapshot.grossProfitMargin = lblGrossProfitMargin.getText();
+        snapshot.overviewRevenueRows = captureTableRows(tblOverviewRevenueByStore);
+        snapshot.reportRevenueRows = captureTableRows(tblReportRevenueByStore);
+
+        frozenRevenueSnapshot = snapshot;
+    }
+
+    private void applyRevenueSnapshot() {
+        RevenueSnapshot snapshot = frozenRevenueSnapshot;
+        if (snapshot == null) {
+            return;
+        }
+
+        if (lblTodayRevenue != null) {
+            lblTodayRevenue.setText(snapshot.todayRevenue);
+        }
+        if (lblMonthRevenue != null) {
+            lblMonthRevenue.setText(snapshot.monthRevenue);
+        }
+        if (lblOrderTotal != null) {
+            lblOrderTotal.setText(snapshot.orderTotal);
+        }
+        if (lblMonthImportCost != null) {
+            lblMonthImportCost.setText(snapshot.monthImportCost);
+        }
+        if (lblGrossProfit != null) {
+            lblGrossProfit.setText(snapshot.grossProfit);
+            lblGrossProfit.setForeground(green);
+            try {
+                if (snapshot.grossProfit != null && snapshot.grossProfit.trim().startsWith("-")) {
+                    lblGrossProfit.setForeground(red);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        if (lblGrossProfitMargin != null) {
+            lblGrossProfitMargin.setText(snapshot.grossProfitMargin);
+        }
+
+        restoreTableRows(tblOverviewRevenueByStore, snapshot.overviewRevenueRows);
+        restoreTableRows(tblReportRevenueByStore, snapshot.reportRevenueRows);
+    }
+
+    private Object[][] captureTableRows(JTable table) {
+        if (table == null || table.getModel() == null) {
+            return new Object[0][0];
+        }
+
+        DefaultTableModel model = (DefaultTableModel) table.getModel();
+        Object[][] rows = new Object[model.getRowCount()][model.getColumnCount()];
+
+        for (int r = 0; r < model.getRowCount(); r++) {
+            for (int c = 0; c < model.getColumnCount(); c++) {
+                rows[r][c] = model.getValueAt(r, c);
+            }
+        }
+
+        return rows;
+    }
+
+    private void restoreTableRows(JTable table, Object[][] rows) {
+        if (table == null || table.getModel() == null || rows == null) {
+            return;
+        }
+
+        DefaultTableModel model = (DefaultTableModel) table.getModel();
+        model.setRowCount(0);
+
+        for (Object[] row : rows) {
+            model.addRow(row);
+        }
     }
 
     private void reloadImportSalesEfficiencyCards() {

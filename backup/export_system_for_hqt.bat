@@ -4,12 +4,12 @@ setlocal enabledelayedexpansion
 
 REM ==========================================================
 REM Export schema SYSTEM để copy dữ liệu Java sang HQT_DEMO
-REM Oracle: 10.0.249.155:1521/ORCLPDB
+REM Oracle: 10.0.212.105:1521/ORCLPDB
 REM Source schema: SYSTEM
 REM Output folder: thư mục backup hiện tại
 REM ==========================================================
 
-set ORACLE_HOST=10.0.249.155
+set ORACLE_HOST=10.0.212.105
 set ORACLE_PORT=1521
 set ORACLE_SERVICE=ORCLPDB
 
