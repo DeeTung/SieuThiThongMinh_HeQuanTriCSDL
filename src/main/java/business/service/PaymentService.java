@@ -510,13 +510,11 @@ public class PaymentService {
                     ? "PAYMENT_CHANGED"
                     : message.trim();
 
-            RealtimeNotifier.customersChanged("CUSTOMERS_UPDATED_BY_" + baseMessage);
+            // Payment only needs one customer/order/inventory signal. The notifier
+            // already emits companion dashboard/statistics events from these calls.
             RealtimeNotifier.ordersChanged("ORDERS_UPDATED_BY_" + baseMessage);
-            RealtimeNotifier.orderDetailsChanged("ORDER_DETAILS_UPDATED_BY_" + baseMessage);
             RealtimeNotifier.inventoryChanged("INVENTORY_UPDATED_BY_" + baseMessage);
-            RealtimeNotifier.productsChanged("PRODUCTS_UPDATED_BY_" + baseMessage);
-            RealtimeNotifier.statisticsChanged("STATISTICS_UPDATED_BY_" + baseMessage);
-            RealtimeNotifier.dashboardChanged("DASHBOARD_UPDATED_BY_" + baseMessage);
+            RealtimeNotifier.customersChanged("CUSTOMERS_UPDATED_BY_" + baseMessage);
         } catch (Exception ex) {
             System.err.println("[PaymentService] realtime notify error: " + ex.getMessage());
         }

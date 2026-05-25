@@ -1,6 +1,7 @@
 package view;
 
 import business.service.AuthorizationService;
+import business.service.PhantomReadDemoService;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
 import common.events.EventBus;
@@ -43,6 +44,9 @@ public class DashboardView extends JFrame {
         SecurityGuard.attach(mainContentPanel);
 
         EventBus.subscribe(AppDataChangedEvent.class, e -> {
+            if (PhantomReadDemoService.isDemoRunningInThisApp()) {
+                return;
+            }
             SwingUtilities.invokeLater(() -> {
                 if (e.getType() == AppEventType.ORDERS && "Tổng quan".equals(currentMenu)) {
                     refreshTongQuanIfVisible();

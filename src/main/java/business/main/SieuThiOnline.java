@@ -121,7 +121,7 @@ public class SieuThiOnline {
         try {
             // DB polling fallback: giúp Admin/Manager/Staff vẫn reload khi APP_SYNC đổi version,
             // kể cả khi WebSocket bị chặn hoặc chạy khác máy.
-            SyncWatcher.start(2);
+            SyncWatcher.start(8);
             System.out.println("[HOÀN TẤT] SyncWatcher đã khởi động.");
         } catch (Exception e) {
             System.err.println("[CẢNH BÁO] Không thể khởi động SyncWatcher: " + e.getMessage());

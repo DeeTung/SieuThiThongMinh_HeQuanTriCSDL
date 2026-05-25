@@ -1,5 +1,6 @@
 package view.components;
 
+import business.service.PhantomReadDemoService;
 import business.sql.sales_order.StatisticSql;
 import business.service.AuthorizationService;
 import common.db.DatabaseConnection;
@@ -98,6 +99,9 @@ public class TongQuanPanel extends JPanel {
         startClock();
 
         EventBus.subscribe(AppDataChangedEvent.class, event -> {
+            if (PhantomReadDemoService.isDemoRunningInThisApp()) {
+                return;
+            }
             if (event.getType() == AppEventType.ORDERS) {
                 SwingUtilities.invokeLater(() -> {
                     loadRealData();

@@ -689,7 +689,7 @@ public class LoginView extends JFrame {
         System.out.println("STARTUP CLEANUP deleted = " + deletedNow);
 
         business.service.TokenCleanupService.start();
-        common.sync.SyncWatcher.start(2);
+        common.sync.SyncWatcher.start(8);
         common.realtime.RealtimeServer.tryStart(8887);
         common.realtime.RealtimeClient.connect("ws://127.0.0.1:8887");
 

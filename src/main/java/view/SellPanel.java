@@ -57,6 +57,7 @@ public class SellPanel extends JPanel {
     private static final String SEARCH_HINT = "🔍 Gõ mã hoặc tên SP vào đây để tìm ...";
     private volatile boolean paymentProcessing = false;
     private volatile boolean paymentJustSucceeded = false;
+    private Timer realtimeProductReloadTimer;
 
     // =========================================================
     // UI COMPONENTS
@@ -151,7 +152,7 @@ public class SellPanel extends JPanel {
                     || e.getType() == AppEventType.ORDERS) {
 
                 SwingUtilities.invokeLater(() -> {
-                    loadProducts();
+                    scheduleRealtimeProductReload();
 
                     // Nếu vừa thanh toán xong hoặc đang xử lý thanh toán thì không validate giỏ cũ nữa.
                     // Tránh hiện cảnh báo "vượt tồn" trong lúc DB đã trừ kho nhưng UI chưa clear cart.
@@ -161,6 +162,15 @@ public class SellPanel extends JPanel {
                 });
             }
         });
+    }
+
+    private void scheduleRealtimeProductReload() {
+        if (realtimeProductReloadTimer == null) {
+            realtimeProductReloadTimer = new Timer(900, e -> loadProducts());
+            realtimeProductReloadTimer.setRepeats(false);
+        }
+
+        realtimeProductReloadTimer.restart();
     }
 
     // =========================================================

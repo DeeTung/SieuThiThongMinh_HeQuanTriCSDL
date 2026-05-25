@@ -11,6 +11,7 @@ import javax.swing.SpinnerDateModel;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
 import common.events.EventBus;
+import business.service.PhantomReadDemoService;
 import business.sql.report.ImportSalesEfficiencySql;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -151,11 +152,14 @@ public class AdminSystemPanel extends JPanel {
     }
 
     private void initRealtime() {
-        realtimeReloadTimer = new Timer(350, e -> reloadAllSafely());
+        realtimeReloadTimer = new Timer(1500, e -> reloadAllSafely());
         realtimeReloadTimer.setRepeats(false);
 
         EventBus.subscribe(AppDataChangedEvent.class, event -> {
             if (event == null || event.getType() == null) {
+                return;
+            }
+            if (PhantomReadDemoService.isDemoRunningInThisApp()) {
                 return;
             }
 

@@ -9,12 +9,14 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
 public class AccountSql implements SqlInterface<Account> {
 
     private static AccountSql instance;
+    private static volatile boolean accountSessionsTableChecked;
 
     public AccountSql() {
     }
@@ -36,6 +38,70 @@ public class AccountSql implements SqlInterface<Account> {
 
     private static String normalizePhoneSql(String columnName) {
         return "REGEXP_REPLACE(NVL(" + columnName + ", ''), '[^0-9]', '')";
+    }
+
+    private static void ensureAccountSessionsTable(Connection con) throws SQLException {
+        if (accountSessionsTableChecked) {
+            return;
+        }
+
+        synchronized (AccountSql.class) {
+            if (accountSessionsTableChecked) {
+                return;
+            }
+
+            if (!tableExists(con, "ACCOUNT_SESSIONS")) {
+                try (Statement st = con.createStatement()) {
+                    st.executeUpdate("""
+                        CREATE TABLE ACCOUNT_SESSIONS (
+                            session_id        VARCHAR2(100) PRIMARY KEY,
+                            account_id        VARCHAR2(50) NOT NULL,
+                            login_at          TIMESTAMP DEFAULT SYSTIMESTAMP,
+                            last_heartbeat_at TIMESTAMP DEFAULT SYSTIMESTAMP,
+                            logout_at         TIMESTAMP NULL,
+                            status            VARCHAR2(20) DEFAULT 'ACTIVE',
+                            device_info       VARCHAR2(500),
+                            ip_address        VARCHAR2(100),
+                            is_deleted        NUMBER(1) DEFAULT 0,
+                            CONSTRAINT fk_account_sessions_account
+                                FOREIGN KEY (account_id)
+                                REFERENCES ACCOUNTS(account_id)
+                        )
+                    """);
+                }
+            }
+
+            if (!indexExists(con, "IDX_ACCOUNT_SESSIONS_ACC")) {
+                try (Statement st = con.createStatement()) {
+                    st.executeUpdate("""
+                        CREATE INDEX IDX_ACCOUNT_SESSIONS_ACC
+                        ON ACCOUNT_SESSIONS(account_id, status, last_heartbeat_at)
+                    """);
+                }
+            }
+
+            accountSessionsTableChecked = true;
+        }
+    }
+
+    private static boolean tableExists(Connection con, String tableName) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM USER_TABLES WHERE TABLE_NAME = ?";
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, tableName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getInt(1) > 0;
+            }
+        }
+    }
+
+    private static boolean indexExists(Connection con, String indexName) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM USER_INDEXES WHERE INDEX_NAME = ?";
+        try (PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setString(1, indexName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getInt(1) > 0;
+            }
+        }
     }
 
     // =========================================================
@@ -1593,14 +1659,18 @@ public class AccountSql implements SqlInterface<Account> {
             )
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            ensureAccountSessionsTable(con);
 
-            ps.setString(1, sessionId);
-            ps.setString(2, accountId);
-            ps.setString(3, System.getProperty("os.name") + " | Java " + System.getProperty("java.version"));
-            ps.setString(4, "local");
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
 
-            return ps.executeUpdate() > 0;
+                ps.setString(1, sessionId);
+                ps.setString(2, accountId);
+                ps.setString(3, System.getProperty("os.name") + " | Java " + System.getProperty("java.version"));
+                ps.setString(4, "local");
+
+                return ps.executeUpdate() > 0;
+            }
 
         } catch (SQLException e) {
             System.err.println("[AccountSql] createLoginSession error: " + e.getMessage());
@@ -1619,12 +1689,15 @@ public class AccountSql implements SqlInterface<Account> {
           AND status = 'ACTIVE'
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            ensureAccountSessionsTable(con);
 
-            ps.setString(1, accountId);
-            ps.setString(2, sessionId);
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
+                ps.setString(1, accountId);
+                ps.setString(2, sessionId);
 
-            return ps.executeUpdate() > 0;
+                return ps.executeUpdate() > 0;
+            }
 
         } catch (SQLException e) {
             System.err.println("[AccountSql] heartbeatSession error: " + e.getMessage());
@@ -1643,12 +1716,15 @@ public class AccountSql implements SqlInterface<Account> {
           AND NVL(is_deleted, 0) = 0
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            ensureAccountSessionsTable(con);
 
-            ps.setString(1, accountId);
-            ps.setString(2, sessionId);
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
+                ps.setString(1, accountId);
+                ps.setString(2, sessionId);
 
-            return ps.executeUpdate() > 0;
+                return ps.executeUpdate() > 0;
+            }
 
         } catch (SQLException e) {
             System.err.println("[AccountSql] closeLoginSession error: " + e.getMessage());
@@ -1666,13 +1742,16 @@ public class AccountSql implements SqlInterface<Account> {
           AND last_heartbeat_at >= SYSTIMESTAMP - INTERVAL '30' SECOND
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            ensureAccountSessionsTable(con);
 
-            ps.setString(1, accountId);
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
+                ps.setString(1, accountId);
 
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    return rs.getInt(1);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        return rs.getInt(1);
+                    }
                 }
             }
 
@@ -1694,9 +1773,12 @@ public class AccountSql implements SqlInterface<Account> {
           AND last_heartbeat_at < SYSTIMESTAMP - INTERVAL '30' SECOND
     """;
 
-        try (Connection con = DatabaseConnection.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+        try (Connection con = DatabaseConnection.getConnection()) {
+            ensureAccountSessionsTable(con);
 
-            ps.executeUpdate();
+            try (PreparedStatement ps = con.prepareStatement(sql)) {
+                ps.executeUpdate();
+            }
 
         } catch (SQLException e) {
             System.err.println("[AccountSql] cleanupDeadSessions error: " + e.getMessage());

@@ -1,6 +1,7 @@
 package view;
 
 import business.service.StatisticService;
+import business.service.PhantomReadDemoService;
 import business.sql.report.ImportSalesEfficiencySql;
 import com.toedter.calendar.JDateChooser;
 import common.report.ReportViewer;
@@ -26,6 +27,7 @@ import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.TreeMap;
+import model.demo.PhantomReadSnapshot;
 
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
@@ -74,11 +76,19 @@ public class StatisticView extends JPanel {
     private MiniLineChartPanel revenueChart;
     private TopStaffPanel topStaffPanel;
 
-    private JTable tblKpi, tblRevenue, tblImportSalesEfficiency, tblProducts;
-    private DefaultTableModel modKpi, modRevenue, modImportSalesEfficiency, modProducts;
+    private JTable tblKpi, tblRevenue, tblImportSalesEfficiency, tblProducts, tblPhantomOrders;
+    private DefaultTableModel modKpi, modRevenue, modImportSalesEfficiency, modProducts, modPhantomOrders;
     private JTabbedPane detailTabs;
+    private JComboBox<PhantomReadDemoService.IsolationMode> cboPhantomIsolation;
+    private JButton btnStartPhantomDemo, btnStopPhantomDemo;
+    private JLabel lblPhantomOrderCount, lblPhantomRevenue;
+    private JTextArea txtPhantomLog;
+    private Timer phantomReadTimer;
+    private Timer statisticRealtimeReloadTimer;
+    private boolean phantomReadLoading;
 
     private final StatisticService statisticService = new StatisticService();
+    private final PhantomReadDemoService phantomReadDemoService = new PhantomReadDemoService();
     private ReportData currentReportData = new ReportData();
 
     public StatisticView() {
@@ -90,6 +100,16 @@ public class StatisticView extends JPanel {
         initEvents();
         subscribeRealtime();
         loadInitialData();
+    }
+
+    @Override
+    public void removeNotify() {
+        stopPhantomReadDemo(false);
+        if (statisticRealtimeReloadTimer != null) {
+            statisticRealtimeReloadTimer.stop();
+            statisticRealtimeReloadTimer = null;
+        }
+        super.removeNotify();
     }
 
     // =========================================================
@@ -333,9 +353,102 @@ public class StatisticView extends JPanel {
         detailTabs.addTab("Doanh thu", wrapTable(tblRevenue));
         detailTabs.addTab("Hiệu quả nhập - bán", wrapTable(tblImportSalesEfficiency));
         detailTabs.addTab("Hàng hóa", wrapTable(tblProducts));
+        detailTabs.addTab("Demo Phantom Read", buildPhantomReadDemoPanel());
         detailTabs.setBorder(BorderFactory.createEmptyBorder());
 
         card.add(detailTabs, BorderLayout.CENTER);
+        return card;
+    }
+
+    private JPanel buildPhantomReadDemoPanel() {
+        JPanel panel = new JPanel(new BorderLayout(14, 14));
+        panel.setOpaque(false);
+        panel.setBorder(new EmptyBorder(14, 14, 14, 14));
+
+        JPanel top = new JPanel(new BorderLayout(14, 0));
+        top.setOpaque(false);
+
+        JPanel controls = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
+        controls.setOpaque(false);
+
+        cboPhantomIsolation = new JComboBox<>(PhantomReadDemoService.IsolationMode.values());
+        cboPhantomIsolation.setFont(normalFont);
+        cboPhantomIsolation.setPreferredSize(new Dimension(180, 38));
+
+        btnStartPhantomDemo = createActionButton("Bắt đầu demo", primaryBlue, Color.WHITE, null, 135);
+        btnStopPhantomDemo = createActionButton("Dừng demo", dangerRed, Color.WHITE, null, 120);
+        btnStopPhantomDemo.setEnabled(false);
+
+        controls.add(createLabel("Mức cô lập:"));
+        controls.add(cboPhantomIsolation);
+        controls.add(btnStartPhantomDemo);
+        controls.add(btnStopPhantomDemo);
+
+        JPanel metrics = new JPanel(new GridLayout(1, 2, 10, 0));
+        metrics.setOpaque(false);
+        metrics.add(createPhantomMetricCard("Số hóa đơn", "0", true));
+        metrics.add(createPhantomMetricCard("Tổng doanh thu", "0 đ", false));
+
+        top.add(controls, BorderLayout.WEST);
+        top.add(metrics, BorderLayout.EAST);
+
+        modPhantomOrders = new DefaultTableModel(new Object[]{
+            "Mã hóa đơn", "Ngày lập", "Nhân viên", "Thanh toán", "Tổng tiền", "Trạng thái"
+        }, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return false;
+            }
+        };
+        tblPhantomOrders = createPowerTable(modPhantomOrders);
+        tblPhantomOrders.getColumnModel().getColumn(4).setCellRenderer(new RightRenderer());
+
+        txtPhantomLog = new JTextArea(7, 20);
+        txtPhantomLog.setEditable(false);
+        txtPhantomLog.setLineWrap(true);
+        txtPhantomLog.setWrapStyleWord(true);
+        txtPhantomLog.setFont(new Font("Consolas", Font.PLAIN, 13));
+        txtPhantomLog.setForeground(textDark);
+        txtPhantomLog.setBackground(new Color(248, 250, 252));
+        txtPhantomLog.setBorder(new EmptyBorder(10, 10, 10, 10));
+
+        JScrollPane logScroll = new JScrollPane(txtPhantomLog);
+        logScroll.setBorder(BorderFactory.createTitledBorder(BorderFactory.createLineBorder(borderLight), "Log đọc dữ liệu"));
+        logScroll.getViewport().setBackground(new Color(248, 250, 252));
+
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, wrapTable(tblPhantomOrders), logScroll);
+        split.setResizeWeight(0.72);
+        split.setBorder(BorderFactory.createEmptyBorder());
+        split.setOpaque(false);
+
+        panel.add(top, BorderLayout.NORTH);
+        panel.add(split, BorderLayout.CENTER);
+        return panel;
+    }
+
+    private JPanel createPhantomMetricCard(String title, String value, boolean orderMetric) {
+        JPanel card = new RoundedCardPanel(14, Color.WHITE, true);
+        card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+        card.setBorder(new EmptyBorder(10, 14, 10, 14));
+        card.setPreferredSize(new Dimension(170, 58));
+
+        JLabel titleLabel = new JLabel(title);
+        titleLabel.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        titleLabel.setForeground(textGray);
+
+        JLabel valueLabel = new JLabel(value);
+        valueLabel.setFont(new Font("Segoe UI", Font.BOLD, 18));
+        valueLabel.setForeground(textDark);
+
+        if (orderMetric) {
+            lblPhantomOrderCount = valueLabel;
+        } else {
+            lblPhantomRevenue = valueLabel;
+        }
+
+        card.add(titleLabel);
+        card.add(Box.createVerticalStrut(4));
+        card.add(valueLabel);
         return card;
     }
 
@@ -368,6 +481,8 @@ public class StatisticView extends JPanel {
         btnFilter.addActionListener(e -> refreshDataWithCurrentDates(false, true));
         btnExportExcel.addActionListener(this::exportActiveTableAsCsv);
         btnExportRevenueReport.addActionListener(e -> exportRevenueReport());
+        btnStartPhantomDemo.addActionListener(e -> startPhantomReadDemo());
+        btnStopPhantomDemo.addActionListener(e -> stopPhantomReadDemo(true));
     }
 
     private void subscribeRealtime() {
@@ -378,9 +493,25 @@ public class StatisticView extends JPanel {
                     || e.getType() == AppEventType.STATISTICS
                     || e.getType() == AppEventType.DASHBOARD
                     || e.getType().toString().contains("ORDER")) {
-                SwingUtilities.invokeLater(() -> refreshDataWithCurrentDates(true, false));
+                if (phantomReadDemoService.isRunning()) {
+                    return;
+                }
+                SwingUtilities.invokeLater(this::scheduleStatisticRealtimeReload);
             }
         });
+    }
+
+    private void scheduleStatisticRealtimeReload() {
+        if (phantomReadDemoService.isRunning()) {
+            return;
+        }
+
+        if (statisticRealtimeReloadTimer == null) {
+            statisticRealtimeReloadTimer = new Timer(1200, e -> refreshDataWithCurrentDates(true, false));
+            statisticRealtimeReloadTimer.setRepeats(false);
+        }
+
+        statisticRealtimeReloadTimer.restart();
     }
 
     private void loadInitialData() {
@@ -460,6 +591,163 @@ public class StatisticView extends JPanel {
         updateSummaryCards(data);
         updateCharts(data);
         updateInsights(data);
+    }
+
+    private void startPhantomReadDemo() {
+        if (phantomReadLoading) {
+            return;
+        }
+
+        PhantomReadDemoService.IsolationMode mode
+                = (PhantomReadDemoService.IsolationMode) cboPhantomIsolation.getSelectedItem();
+
+        stopPhantomReadTimer();
+        if (statisticRealtimeReloadTimer != null) {
+            statisticRealtimeReloadTimer.stop();
+        }
+        setPhantomControlsRunning(true);
+        clearPhantomDemoView();
+        appendPhantomLog("START " + mode + ": mở transaction demo và đọc baseline.");
+
+        phantomReadLoading = true;
+
+        new SwingWorker<PhantomReadSnapshot, Void>() {
+            @Override
+            protected PhantomReadSnapshot doInBackground() throws Exception {
+                phantomReadDemoService.start(mode);
+                return phantomReadDemoService.readNext();
+            }
+
+            @Override
+            protected void done() {
+                phantomReadLoading = false;
+                try {
+                    renderPhantomSnapshot(get());
+                    startPhantomReadTimer();
+                } catch (Exception ex) {
+                    stopPhantomReadDemo(false);
+                    showPhantomError("Không thể bắt đầu demo Phantom Read", ex);
+                }
+            }
+        }.execute();
+    }
+
+    private void readPhantomSnapshotAsync() {
+        if (phantomReadLoading || !phantomReadDemoService.isRunning()) {
+            return;
+        }
+
+        phantomReadLoading = true;
+
+        new SwingWorker<PhantomReadSnapshot, Void>() {
+            @Override
+            protected PhantomReadSnapshot doInBackground() throws Exception {
+                return phantomReadDemoService.readNext();
+            }
+
+            @Override
+            protected void done() {
+                phantomReadLoading = false;
+                try {
+                    renderPhantomSnapshot(get());
+                } catch (Exception ex) {
+                    stopPhantomReadDemo(false);
+                    showPhantomError("Lỗi khi đọc lại dữ liệu Phantom Read", ex);
+                }
+            }
+        }.execute();
+    }
+
+    private void stopPhantomReadDemo(boolean logMessage) {
+        stopPhantomReadTimer();
+        phantomReadDemoService.stop();
+        phantomReadLoading = false;
+        setPhantomControlsRunning(false);
+
+        if (logMessage) {
+            appendPhantomLog("STOP: rollback transaction demo và đóng connection.");
+        }
+    }
+
+    private void startPhantomReadTimer() {
+        phantomReadTimer = new Timer(5000, e -> readPhantomSnapshotAsync());
+        phantomReadTimer.start();
+    }
+
+    private void stopPhantomReadTimer() {
+        if (phantomReadTimer != null) {
+            phantomReadTimer.stop();
+            phantomReadTimer = null;
+        }
+    }
+
+    private void setPhantomControlsRunning(boolean running) {
+        if (btnStartPhantomDemo != null) {
+            btnStartPhantomDemo.setEnabled(!running);
+        }
+        if (btnStopPhantomDemo != null) {
+            btnStopPhantomDemo.setEnabled(running);
+        }
+        if (cboPhantomIsolation != null) {
+            cboPhantomIsolation.setEnabled(!running);
+        }
+    }
+
+    private void clearPhantomDemoView() {
+        if (modPhantomOrders != null) {
+            modPhantomOrders.setRowCount(0);
+        }
+        if (lblPhantomOrderCount != null) {
+            lblPhantomOrderCount.setText("0");
+        }
+        if (lblPhantomRevenue != null) {
+            lblPhantomRevenue.setText("0 đ");
+        }
+        if (txtPhantomLog != null) {
+            txtPhantomLog.setText("");
+        }
+    }
+
+    private void renderPhantomSnapshot(PhantomReadSnapshot snapshot) {
+        lblPhantomOrderCount.setText(String.valueOf(snapshot.getTotalOrders()));
+        lblPhantomRevenue.setText(formatCurrency(snapshot.getTotalRevenue().doubleValue()));
+
+        modPhantomOrders.setRowCount(0);
+        SimpleDateFormat df = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss");
+
+        for (PhantomReadSnapshot.OrderRow row : snapshot.getOrders()) {
+            modPhantomOrders.addRow(new Object[]{
+                row.getOrderId(),
+                row.getOrderDate() == null ? "" : df.format(row.getOrderDate()),
+                row.getEmployeeId(),
+                row.getPaymentMethodId(),
+                formatCurrency(row.getTotalAmount().doubleValue()),
+                row.getStatus()
+            });
+        }
+
+        appendPhantomLog(
+                "Lần đọc " + snapshot.getReadNo()
+                + ": " + snapshot.getTotalOrders() + " hóa đơn, "
+                + formatCurrency(snapshot.getTotalRevenue().doubleValue())
+                + " | " + snapshot.getIsolationLevel()
+        );
+        appendPhantomLog(snapshot.getConclusionMessage());
+    }
+
+    private void appendPhantomLog(String message) {
+        if (txtPhantomLog == null || message == null || message.isBlank()) {
+            return;
+        }
+
+        txtPhantomLog.append(message + System.lineSeparator());
+        txtPhantomLog.setCaretPosition(txtPhantomLog.getDocument().getLength());
+    }
+
+    private void showPhantomError(String title, Exception ex) {
+        ex.printStackTrace();
+        String message = ex.getCause() != null ? ex.getCause().getMessage() : ex.getMessage();
+        JOptionPane.showMessageDialog(this, title + ": " + message, "Lỗi", JOptionPane.ERROR_MESSAGE);
     }
 
     private void fillRevenueTable(List<Object[]> rows) {

@@ -1,5 +1,6 @@
 package view;
 
+import business.service.PhantomReadDemoService;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
 import common.events.EventBus;
@@ -142,6 +143,9 @@ public class AdminDashboardView extends javax.swing.JFrame {
     private void setupRealtimeSync() {
         EventBus.subscribe(AppDataChangedEvent.class, e -> {
             if (e == null || e.getType() == null) {
+                return;
+            }
+            if (PhantomReadDemoService.isDemoRunningInThisApp()) {
                 return;
             }
 

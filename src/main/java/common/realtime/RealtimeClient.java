@@ -3,6 +3,7 @@ package common.realtime;
 import common.events.AppDataChangedEvent;
 import common.events.AppEventType;
 import common.events.EventBus;
+import business.service.PhantomReadDemoService;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Window;
@@ -136,6 +137,10 @@ public final class RealtimeClient {
     }
 
     private static void dispatchRealtimeMessage(String message) {
+        if (PhantomReadDemoService.isDemoRunningInThisApp()) {
+            return;
+        }
+
         AppEventType type = mapMessageToType(message);
 
         if (type != null) {
